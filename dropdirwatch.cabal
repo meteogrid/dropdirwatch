@@ -33,6 +33,7 @@ library
                      , System.DirWatch.PluginAPI
   other-modules:       System.DirWatch.Config
                      , System.DirWatch.Interpreter
+                     , System.DirWatch.Types
   -- other-extensions:    
   build-depends:       base >=4.7 && <5
                      , hinotify
