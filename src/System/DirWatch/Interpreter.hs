@@ -95,7 +95,7 @@ compileCode spec = Compiler $ do
   case spec of
     EvalCode s -> do
       setImportsQ pluginImports
-      interpret s as
+      interpret ('\\':s) as
     ImportCode m s c -> do
       loadModules [m]
       setTopLevelModules [m]

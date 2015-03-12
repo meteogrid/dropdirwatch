@@ -7,7 +7,10 @@ watchers:
       - lolo
     preprocessor:
       eval:
-        \filename d -> [(replaceBaseName filename "foo_", d)]
+        filename content ->
+          [ (replaceBaseName filename "foo_", content)
+          , (replaceBaseName filename "bar_", content)
+          ]
   - name: importPlugin
     paths:
       - lala
@@ -20,10 +23,15 @@ watchers:
       - lala
       - lolo
     preprocessor:
-      eval: \filename d -> case filename of {
-                             "lala" -> [("lelo", d)];
-                             "lolo" -> [("lalo", d)];
-                             }
+      eval: filename content ->
+              let {
+                foo="bar";
+                bar="foo"
+              } in
+                case filename of {
+                  "lala" -> [(foo, content)];
+                  "lolo" -> [(bar, content)];
+                }
   - name: shell
     paths:
       - lala
