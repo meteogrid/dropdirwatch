@@ -42,7 +42,6 @@ library
                      , mtl
                      , lifted-base
                      , exceptions
-                     , ftphs
                      , bytestring
                      , text
                      , unordered-containers
