@@ -1,16 +1,26 @@
 pluginDirs:
   - test/plugins
 watchers:
-  - name: foo
+  - name: evalSingleLine
     paths:
       - lala
       - lolo
     preprocessor:
-      eval: \filename d -> [(filename, d)]
-  - name: foo
+      eval:
+        \filename d -> [(replaceBaseName filename "foo_", d)]
+  - name: importPlugin
     paths:
       - lala
       - lolo
     preprocessor:
       import: Plugin:addPrefix
       prefix: foo
+  - name: evalMultiLine
+    paths:
+      - lala
+      - lolo
+    preprocessor:
+      eval: \filename d -> case filename of {
+                             "lala" -> [("lelo", d)];
+                             "lolo" -> [("lalo", d)];
+                             }

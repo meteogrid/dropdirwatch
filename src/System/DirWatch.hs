@@ -135,32 +135,36 @@ loadWatcher w = do
 loadCode :: forall a. Typeable a => Code -> IO a
 loadCode spec = do
   result <- runInterpreter $ do
-    setImportsQ [
-        ("System.DirWatch.PluginAPI", Just "API")
-      , ("Data.Aeson", Nothing)
-      , ("Data.ByteString.Lazy", Nothing)
-      , ("Prelude", Nothing)
-      ]
     set [searchPath := ["test/plugins"]]
     case spec of
       EvalCode s -> do
+        pluginImports
         interpret s as
       ImportCode m s c -> do
         loadModules [m]
         setTopLevelModules [m]
-        let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
-                         , "Right v -> Right (", s, " v);"
-                         , "e -> e}"
+        pluginImports
+        let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of "
+                         , "{ Right v -> Right (", s, " v)"
+                         , "; Left e -> Left e}"
                          ]
         eO <- interpret cmd as
-        case eO of 
-          Right o -> return (o c)
-          Left e -> fail $ concat [ "Error when loading ", s, " from ", m, ": "
-                                  , e]
+        case eO c of 
+          Right o -> return o
+          Left e -> fail $ concat ["Error when loading ", m, ":", s, ": ", e]
   case result of
     Left  e -> error $ show e
     Right v -> return v
     
+pluginImports = setImportsQ [
+    ("Data.Aeson", Nothing)
+  , ("Data.Aeson.Types", Nothing)
+  , ("System.DirWatch.PluginAPI", Nothing)
+  , ("Data.HashMap.Strict", Nothing)
+  , ("Data.Text", Nothing)
+  , ("Data.ByteString.Lazy", Nothing)
+  , ("Prelude", Nothing)
+  ]
 
 newtype Handler
   = Handler {
