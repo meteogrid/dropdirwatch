@@ -19,7 +19,8 @@ cabal-version:       >=1.10
 library
   exposed-modules:     System.DirWatch
                      , System.DirWatch.PluginAPI
-  -- other-modules:       
+  other-modules:       System.DirWatch.Config
+                     , System.DirWatch.Interpreter
   -- other-extensions:    
   build-depends:       base >=4.7 && <5
                      , hinotify
