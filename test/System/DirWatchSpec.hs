@@ -9,7 +9,10 @@ main = hspec spec
 spec :: Spec
 spec = do
   describe "Config" $ do
-    Right sConfig <- runIO $ decodeFileEither "test/config.yaml"
+    eConfig <- runIO $ decodeFileEither "test/config.yaml"
     it "can load config" $ do
-      config <- loadConfig sConfig
-      return ()
+      case eConfig of
+        Right sConfig -> do
+          config <- loadConfig sConfig
+          return ()
+        Left e -> expectationFailure $ "Could not parse YAML: " ++ show e

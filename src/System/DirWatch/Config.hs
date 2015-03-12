@@ -6,15 +6,16 @@ module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
   , Code (..)
+  , HandlerCode (..)
   , Handler (..)
   , PreProcessor (..)
   , SerializableConfig
-  , RunableConfig
+  , RunnableConfig
   , SerializableWatcher
-  , RunableWatcher
+  , RunnableWatcher
 ) where
 
-import Control.Applicative ((<$>), (<*>))
+import Control.Applicative ((<$>), (<*>), (<|>))
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -39,11 +40,11 @@ data Config p h
     , cfgWatchers   :: [Watcher p h]
   }
 
-type SerializableConfig = Config Code Code
-type RunableConfig      = Config PreProcessor Handler
+type SerializableConfig = Config Code HandlerCode
+type RunnableConfig      = Config PreProcessor Handler
 
-type SerializableWatcher = Watcher Code Code
-type RunableWatcher      = Watcher PreProcessor Handler
+type SerializableWatcher = Watcher Code HandlerCode
+type RunnableWatcher     = Watcher PreProcessor Handler
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
@@ -79,10 +80,10 @@ instance ToJSON SerializableWatcher where
 instance FromJSON SerializableWatcher where
   parseJSON (Object v)
       = Watcher <$>
-        v .:  "name" <*>
-        v .:  "paths" <*>
-        v .:  "preprocessor" <*>
-        v .:? "handlers" .!= []
+        v .:   "name" <*>
+        v .:   "paths" <*>
+        v .:?  "preprocessor" <*>
+        v .:?  "handlers" .!= []
   parseJSON _ = fail "Expected an object"
 
 data Code
@@ -101,16 +102,28 @@ instance ToJSON Code where
             _          -> error "should never happen"
 
 instance FromJSON Code where
-  parseJSON (Object v) = do
-    mEval <- v .:? "eval"
-    case mEval of
-      Just s  -> return $ EvalCode s
-      Nothing -> do
-        i <- v .: "import"
-        case L.splitOn ":" i of
-          [m,s] -> return (ImportCode m s (HM.delete "import" v))
-          _     -> fail "\"import\" should be <module>:<symbol>"
+  parseJSON (Object v)
+      = (EvalCode <$> v .: "eval")
+    <|> (do i <- v .: "import"
+            case L.splitOn ":" i of
+             [m,s] -> return (ImportCode m s (HM.delete "import" v))
+             _     -> fail "\"import\" should be <module>:<symbol>")
   parseJSON _ = fail "Expected an object"
+
+data HandlerCode
+  = HandlerCode  Code
+  | HandlerShell [String]
+  deriving Show
+
+instance ToJSON HandlerCode where
+  toJSON (HandlerCode  c) = toJSON c
+  toJSON (HandlerShell c) = object ["shell" .= toJSON c]
+
+instance FromJSON HandlerCode where
+  parseJSON o@(Object v)
+    = (HandlerShell <$> v .: "shell") <|> (HandlerCode <$> parseJSON o)
+  parseJSON _ = fail "Expected an object"
+
 
 newtype Handler
   = Handler {

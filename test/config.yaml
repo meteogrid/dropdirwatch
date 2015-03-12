@@ -24,3 +24,10 @@ watchers:
                              "lala" -> [("lelo", d)];
                              "lolo" -> [("lalo", d)];
                              }
+  - name: shell
+    paths:
+      - lala
+      - lolo
+    handlers:
+      - shell:
+          - scp $FILENAME $BAR

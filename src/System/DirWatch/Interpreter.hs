@@ -3,6 +3,7 @@ module System.DirWatch.Interpreter (
   loadConfig
 ) where
 
+import Control.Monad (forM_)
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     runInterpreter
@@ -15,20 +16,51 @@ import Language.Haskell.Interpreter (
   , searchPath
   , OptionVal ((:=))
   )
+import System.Process (
+    CreateProcess(..)
+  , StdStream(CreatePipe)
+  , shell
+  , waitForProcess
+  , createProcess
+  )
+import qualified Data.ByteString.Lazy as LBS
+import System.Exit (ExitCode(..))
 import System.DirWatch.Config
 
-loadConfig :: SerializableConfig -> IO RunableConfig
+loadConfig :: SerializableConfig -> IO RunnableConfig
 loadConfig c = do
   watchers <- mapM loadWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
 
-loadWatcher :: SerializableWatcher -> IO RunableWatcher
+loadWatcher :: SerializableWatcher -> IO RunnableWatcher
 loadWatcher w = do
   mP <- case wPreProcessor w of
           Nothing -> return Nothing
           Just p  -> fmap (Just . PreProcessor) $ loadCode p
-  hs <- mapM (fmap Handler . loadCode) (wHandlers w)
+  hs <- mapM loadHandler (wHandlers w)
   return $ w {wPreProcessor=mP, wHandlers=hs}
+
+loadHandler :: HandlerCode -> IO Handler
+loadHandler (HandlerCode code)  = fmap Handler (loadCode code)
+loadHandler (HandlerShell cmds) = return $ executeShellCommands cmds
+
+
+executeShellCommands :: [String] -> Handler
+executeShellCommands cmds = Handler handler
+  where
+    handler filename content
+      = forM_ cmds $ \cmd -> do
+          let process = (shell cmd)
+                { std_in = CreatePipe
+                , env    = Just ([("FILENAME", filename)])
+                }
+          (Just s_in, _, _, h) <- createProcess process
+          LBS.hPut s_in content
+          exitCode <- waitForProcess h
+          case exitCode of
+            ExitSuccess   -> return ()
+            ExitFailure c -> error $ concat [ "Shell command", show cmd
+                                            , " exited with code ", show c]
 
 loadCode :: forall a. Typeable a => Code -> IO a
 loadCode spec = do
