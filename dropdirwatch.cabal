@@ -3,18 +3,30 @@
 
 name:                dropdirwatch
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            Perform action when files are created on a filesystem.
+description:         Dropdirwatch is can be configured to perform actions when
+                     files are created in certain directories.
+
+                     Actions can be shell commands, Haskell code written
+                     inline in the YAML config file or Haskell plugins
+                     stored in the file system.
+
+                     The config file is automatically reloaded when modified
+                     (if it compiles correctly) as well as the plugins.
 homepage:            https://github.com/meteogrid/dropdirwatch
 license:             BSD3
 license-file:        LICENSE
 author:              Alberto Valverde González
 maintainer:          alberto@meteogrid.com
--- copyright:           
+copyright:           2015 Meteogrid
 category:            System
 build-type:          Simple
--- extra-source-files:  
+extra-source-files:  README.md
 cabal-version:       >=1.10
+
+source-repository head
+  type:              git
+  location:          https://github.com/meteogrid/dropdirwatch
 
 library
   exposed-modules:     System.DirWatch
