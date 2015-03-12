@@ -13,6 +13,8 @@ spec = do
     it "can load config" $ do
       case eConfig of
         Right sConfig -> do
-          config <- loadConfig sConfig
-          return ()
+          rConfig <- compileConfig sConfig
+          case rConfig of
+            Right _ -> return ()
+            Left e  -> expectationFailure $ show e
         Left e -> expectationFailure $ "Could not parse YAML: " ++ show e

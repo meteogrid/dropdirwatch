@@ -1,5 +1,5 @@
 module System.DirWatch (
-    loadConfig
+    compileConfig
   , decodeFileEither
 ) where
 

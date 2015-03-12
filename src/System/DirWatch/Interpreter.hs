@@ -1,12 +1,20 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.DirWatch.Interpreter (
-  loadConfig
+  compileConfig
 ) where
 
 import Control.Monad (forM_)
+import Control.Applicative (Applicative)
+import Control.Monad.Reader (ReaderT(..), asks)
+import Control.Monad.Trans (lift)
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
-    runInterpreter
+    InterpreterT
+  , InterpreterError
+  , ModuleName
+  , runInterpreter
   , interpret
   , as
   , setImportsQ
@@ -27,32 +35,50 @@ import qualified Data.ByteString.Lazy as LBS
 import System.Exit (ExitCode(..))
 import System.DirWatch.Config
 
-loadConfig :: SerializableConfig -> IO RunnableConfig
-loadConfig c = do
-  watchers <- mapM loadWatcher (cfgWatchers c)
-  return $ c {cfgWatchers=watchers}
+data CompilerConfig
+  = CompilerConfig {
+      ccSearchPath :: [FilePath]
+    , ccShellEnv   :: [(String,String)]
+  }
 
-loadWatcher :: SerializableWatcher -> IO RunnableWatcher
-loadWatcher w = do
+newtype Compiler a
+  = Compiler {
+      runCompiler :: InterpreterT (ReaderT CompilerConfig IO) a
+  } deriving (Functor, Applicative, Monad)
+
+compileConfig
+  :: SerializableConfig -> IO (Either InterpreterError RunnableConfig)
+compileConfig c = flip runReaderT cConfig . runInterpreter . runCompiler $ do
+  watchers <- mapM compileWatcher (cfgWatchers c)
+  return $ c {cfgWatchers=watchers}
+  where cConfig = CompilerConfig {
+                    ccSearchPath = cfgPluginDirs c
+                  , ccShellEnv   = cfgShellEnv c
+                  }
+
+compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
+compileWatcher w = do
   mP <- case wPreProcessor w of
           Nothing -> return Nothing
-          Just p  -> fmap (Just . PreProcessor) $ loadCode p
-  hs <- mapM loadHandler (wHandlers w)
+          Just p  -> fmap (Just . PreProcessor) $ compileCode p
+  hs <- mapM compileHandler (wHandlers w)
   return $ w {wPreProcessor=mP, wHandlers=hs}
 
-loadHandler :: HandlerCode -> IO Handler
-loadHandler (HandlerCode code)  = fmap Handler (loadCode code)
-loadHandler (HandlerShell cmds) = return $ executeShellCommands cmds
+compileHandler :: HandlerCode -> Compiler Handler
+compileHandler (HandlerCode code)  = fmap Handler (compileCode code)
+compileHandler (HandlerShell cmds) = executeShellCommands cmds
 
 
-executeShellCommands :: [String] -> Handler
-executeShellCommands cmds = Handler handler
+executeShellCommands :: [String] -> Compiler Handler
+executeShellCommands cmds = do
+  env <- Compiler . lift . asks $ ccShellEnv
+  return $ Handler (handler env)
   where
-    handler filename content
+    handler env filename content
       = forM_ cmds $ \cmd -> do
           let process = (shell cmd)
                 { std_in = CreatePipe
-                , env    = Just ([("FILENAME", filename)])
+                , env    = Just (env ++ [("FILENAME", filename)])
                 }
           (Just s_in, _, _, h) <- createProcess process
           LBS.hPut s_in content
@@ -62,32 +88,30 @@ executeShellCommands cmds = Handler handler
             ExitFailure c -> error $ concat [ "Shell command", show cmd
                                             , " exited with code ", show c]
 
-loadCode :: forall a. Typeable a => Code -> IO a
-loadCode spec = do
-  result <- runInterpreter $ do
-    set [searchPath := ["test/plugins"]]
-    case spec of
-      EvalCode s -> do
-        pluginImports
-        interpret s as
-      ImportCode m s c -> do
-        loadModules [m]
-        setTopLevelModules [m]
-        pluginImports
-        let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
-                         , "          Right v -> Right (", s, " v);          "
-                         , "          Left e  -> Left e;                     "
-                         , "          }                                      "
-                         ]
-        eO <- interpret cmd as
-        case eO c of 
-          Right o -> return o
-          Left e -> fail $ concat ["Error when loading ", m, ":", s, ": ", e]
-  case result of
-    Left  e -> error $ show e
-    Right v -> return v
+compileCode :: forall a. Typeable a => Code -> Compiler a
+compileCode spec = Compiler $ do
+  sp <- lift $ asks ccSearchPath
+  set [searchPath := sp]
+  case spec of
+    EvalCode s -> do
+      setImportsQ pluginImports
+      interpret s as
+    ImportCode m s c -> do
+      loadModules [m]
+      setTopLevelModules [m]
+      setImportsQ pluginImports
+      let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
+                       , "          Right v -> Right (", s, " v);          "
+                       , "          Left e  -> Left e;                     "
+                       , "          }                                      "
+                       ]
+      eO <- interpret cmd as
+      case eO c of 
+        Right o -> return o
+        Left e -> fail $ concat ["Error when compiling ", m, ":", s, ": ", e]
     
-pluginImports = setImportsQ [
+pluginImports :: [(ModuleName, Maybe String)]
+pluginImports = [
     ("Data.Aeson", Nothing)
   , ("Data.Aeson.Types", Nothing)
   , ("System.DirWatch.PluginAPI", Nothing)

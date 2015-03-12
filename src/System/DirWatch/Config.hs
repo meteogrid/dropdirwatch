@@ -37,6 +37,7 @@ import System.FilePath.GlobPattern (GlobPattern)
 data Config p h
   = Config {
       cfgPluginDirs :: [FilePath]
+    , cfgShellEnv   :: [(String,String)]
     , cfgWatchers   :: [Watcher p h]
   }
 
@@ -51,12 +52,14 @@ instance ToJSON SerializableConfig where
     = object [
       "watchers"   .= cfgWatchers
     , "pluginDirs" .= cfgPluginDirs
+    , "env"        .= cfgShellEnv
     ]
 
 instance FromJSON SerializableConfig where
   parseJSON (Object v)
     = Config <$>
       v .:? "pluginDirs" .!= [] <*>
+      v .:? "env" .!= [] <*>
       v .:  "watchers"
   parseJSON _ = fail "Expected an object"
 
