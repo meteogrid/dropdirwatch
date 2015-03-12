@@ -1,5 +1,8 @@
 pluginDirs:
   - test/plugins
+env:
+  +PATH: /opt/foo 
+  FOO: bar
 watchers:
   - name: evalSingleLine
     paths:

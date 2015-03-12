@@ -8,6 +8,7 @@ module System.DirWatch.Interpreter (
 import Control.Monad (forM_)
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans (lift)
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
@@ -24,6 +25,7 @@ import Language.Haskell.Interpreter (
   , searchPath
   , OptionVal ((:=))
   )
+import System.Environment (getEnvironment)
 import System.Process (
     CreateProcess(..)
   , StdStream(CreatePipe)
@@ -32,13 +34,14 @@ import System.Process (
   , createProcess
   )
 import qualified Data.ByteString.Lazy as LBS
+import qualified Data.List as L
 import System.Exit (ExitCode(..))
 import System.DirWatch.Config
 
 data CompilerConfig
   = CompilerConfig {
       ccSearchPath :: [FilePath]
-    , ccShellEnv   :: [(String,String)]
+    , ccShellEnv   :: ShellEnv
   }
 
 newtype Compiler a
@@ -71,7 +74,7 @@ compileHandler (HandlerShell cmds) = executeShellCommands cmds
 
 executeShellCommands :: [String] -> Compiler Handler
 executeShellCommands cmds = do
-  env <- Compiler . lift . asks $ ccShellEnv
+  env <- shellEnvironment
   return $ Handler (handler env)
   where
     handler env filename content
@@ -87,6 +90,23 @@ executeShellCommands cmds = do
             ExitSuccess   -> return ()
             ExitFailure c -> error $ concat [ "Shell command", show cmd
                                             , " exited with code ", show c]
+
+shellEnvironment :: Compiler [(String,String)]
+shellEnvironment = Compiler $ do
+    localEnv <- lift (asks ccShellEnv)
+    sysEnv   <- liftIO getEnvironment
+    return $ mergeEnviroments sysEnv localEnv
+
+mergeEnviroments :: [(String, String)] -> ShellEnv -> [(String,String)]
+mergeEnviroments sysEnv (ShellEnv localEnv) =
+    let sysEnv' = [(k,v) | (k,v)<-sysEnv, k `notElem` map envKey localEnv]
+        localEnv' = map keyVal localEnv
+        keyVal (EnvSet k v)    = (k,v)
+        keyVal (EnvAppend k v) =
+                 case L.lookup k sysEnv of
+                   Nothing  -> (k,v)
+                   Just val -> (k, val ++ ":" ++ v)
+    in localEnv' ++ sysEnv'
 
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do

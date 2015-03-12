@@ -6,6 +6,8 @@ module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
   , Code (..)
+  , EnvItem (..)
+  , ShellEnv (..)
   , HandlerCode (..)
   , Handler (..)
   , PreProcessor (..)
@@ -15,7 +17,7 @@ module System.DirWatch.Config (
   , RunnableWatcher
 ) where
 
-import Control.Applicative ((<$>), (<*>), (<|>))
+import Control.Applicative ((<$>), (<*>), (<|>), pure)
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -27,7 +29,7 @@ import Data.Aeson (
   , (.:?)
   , (.!=)
   )
-import Data.Text (Text)
+import Data.Text (Text, pack, unpack, uncons)
 import Data.Typeable (Typeable)
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
@@ -37,7 +39,7 @@ import System.FilePath.GlobPattern (GlobPattern)
 data Config p h
   = Config {
       cfgPluginDirs :: [FilePath]
-    , cfgShellEnv   :: [(String,String)]
+    , cfgShellEnv   :: ShellEnv
     , cfgWatchers   :: [Watcher p h]
   }
 
@@ -46,6 +48,8 @@ type RunnableConfig      = Config PreProcessor Handler
 
 type SerializableWatcher = Watcher Code HandlerCode
 type RunnableWatcher     = Watcher PreProcessor Handler
+
+newtype ShellEnv = ShellEnv [EnvItem] deriving (Show, Eq)
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
@@ -59,9 +63,29 @@ instance FromJSON SerializableConfig where
   parseJSON (Object v)
     = Config <$>
       v .:? "pluginDirs" .!= [] <*>
-      v .:? "env" .!= [] <*>
+      v .:? "env" .!= ShellEnv [] <*>
       v .:  "watchers"
   parseJSON _ = fail "Expected an object"
+
+data EnvItem
+  = EnvSet    {envKey :: String, envVal :: String}
+  | EnvAppend {envKey :: String, envVal :: String}
+  deriving (Show, Eq)
+
+instance ToJSON ShellEnv where
+  toJSON (ShellEnv items) = object $ map toPair items
+    where toPair (EnvSet k v)    = (pack k, toJSON v)
+          toPair (EnvAppend k v) = (pack ('+':k), toJSON v)
+
+instance FromJSON ShellEnv where
+  parseJSON (Object o)
+    = ShellEnv <$> mapM fromPair (HM.toList o)
+    where
+      fromPair (k, v) = case uncons k of
+        Just ('+',k') -> EnvAppend <$> pure (unpack k') <*> parseJSON v
+        Just _        -> EnvSet    <$> pure (unpack k)  <*> parseJSON v
+        Nothing       -> fail "Unexpected empty jey for ShellEnv"
+  parseJSON _ = fail "Expected for env"
 
 data Watcher p h
   = Watcher {
