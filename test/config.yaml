@@ -1,0 +1,16 @@
+pluginDirs:
+  - test/plugins
+watchers:
+  - name: foo
+    paths:
+      - lala
+      - lolo
+    preprocessor:
+      eval: \filename d -> [(filename, d)]
+  - name: foo
+    paths:
+      - lala
+      - lolo
+    preprocessor:
+      import: Plugin:addPrefix
+      prefix: foo

@@ -3,9 +3,12 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DeriveDataTypeable #-}
-module System.DirWatch where
+module System.DirWatch (
+    loadConfig
+  , decodeFileEither
+) where
 
-import Control.Applicative (<$>), (<*>))
+import Control.Applicative ((<$>), (<*>))
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -29,30 +32,38 @@ import Language.Haskell.Interpreter (
   , as
   , setImportsQ
   , loadModules
+  , setTopLevelModules
+  , set
+  , searchPath
+  , OptionVal ((:=))
   )
+import Data.Yaml (decodeFileEither)
 import Prelude
 
 data Config p h
   = Config {
-      cfgWatchers :: [Watcher p h]
+      cfgPluginDirs :: [FilePath]
+    , cfgWatchers   :: [Watcher p h]
   }
 
-type SerializableConfig = Config Spec Spec
+type SerializableConfig = Config Code Code
 type RunableConfig      = Config PreProcessor Handler
 
-type SerializableWatcher = Watcher Spec Spec
+type SerializableWatcher = Watcher Code Code
 type RunableWatcher      = Watcher PreProcessor Handler
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
     = object [
-      "watchers" .= cfgWatchers
+      "watchers"   .= cfgWatchers
+    , "pluginDirs" .= cfgPluginDirs
     ]
 
 instance FromJSON SerializableConfig where
   parseJSON (Object v)
     = Config <$>
-      v .: "watchers"
+      v .:? "pluginDirs" .!= [] <*>
+      v .:  "watchers"
   parseJSON _ = fail "Expected an object"
 
 data Watcher p h
@@ -81,30 +92,30 @@ instance FromJSON SerializableWatcher where
         v .:? "handlers" .!= []
   parseJSON _ = fail "Expected an object"
 
-data Spec
-  = EvalSpec   String
-  | ImportSpec String String Object
+data Code
+  = EvalCode   String
+  | ImportCode String String Object
   deriving (Show)
 
-instance ToJSON Spec where
-  toJSON (EvalSpec s)
+instance ToJSON Code where
+  toJSON (EvalCode s)
     = object ["eval" .= s]
-  toJSON (ImportSpec m s c)
+  toJSON (ImportCode m s c)
     = Object (HM.union os c)
     where
       os = case object ["import" .= concat [m, ":", s]] of
             Object os' -> os'
             _          -> error "should never happen"
 
-instance FromJSON Spec where
+instance FromJSON Code where
   parseJSON (Object v) = do
     mEval <- v .:? "eval"
     case mEval of
-      Just s  -> return $ EvalSpec s
+      Just s  -> return $ EvalCode s
       Nothing -> do
         i <- v .: "import"
         case L.splitOn ":" i of
-          [m,s] -> return (ImportSpec m s (HM.delete "import" v))
+          [m,s] -> return (ImportCode m s (HM.delete "import" v))
           _     -> fail "\"import\" should be <module>:<symbol>"
   parseJSON _ = fail "Expected an object"
 
@@ -117,20 +128,35 @@ loadWatcher :: SerializableWatcher -> IO RunableWatcher
 loadWatcher w = do
   mP <- case wPreProcessor w of
           Nothing -> return Nothing
-          Just p  -> fmap Just $ loadSpec p
-  hs <- mapM loadSpec (wHandlers w)
+          Just p  -> fmap (Just . PreProcessor) $ loadCode p
+  hs <- mapM (fmap Handler . loadCode) (wHandlers w)
   return $ w {wPreProcessor=mP, wHandlers=hs}
 
-loadSpec :: forall a. Typeable a => Spec -> IO a
-loadSpec spec = do
+loadCode :: forall a. Typeable a => Code -> IO a
+loadCode spec = do
   result <- runInterpreter $ do
-    setImportsQ [("Prelude", Nothing)]
+    setImportsQ [
+        ("System.DirWatch.PluginAPI", Just "API")
+      , ("Data.Aeson", Nothing)
+      , ("Data.ByteString.Lazy", Nothing)
+      , ("Prelude", Nothing)
+      ]
+    set [searchPath := ["test/plugins"]]
     case spec of
-      EvalSpec s -> interpret s as
-      ImportSpec m s c -> do
+      EvalCode s -> do
+        interpret s as
+      ImportCode m s c -> do
         loadModules [m]
-        o <- interpret s (as :: Object -> a)
-        return (o c)
+        setTopLevelModules [m]
+        let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
+                         , "Right v -> Right (", s, " v);"
+                         , "e -> e}"
+                         ]
+        eO <- interpret cmd as
+        case eO of 
+          Right o -> return (o c)
+          Left e -> fail $ concat [ "Error when loading ", s, " from ", m, ": "
+                                  , e]
   case result of
     Left  e -> error $ show e
     Right v -> return v
