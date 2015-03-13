@@ -5,14 +5,12 @@ module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
   , Code (..)
-  , EnvItem (..)
-  , ShellEnv (..)
   , HandlerCode (..)
   , SerializableConfig
   , SerializableWatcher
 ) where
 
-import Control.Applicative ((<$>), (<*>), (<|>), pure)
+import Control.Applicative ((<$>), (<*>), (<|>))
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -24,10 +22,12 @@ import Data.Aeson (
   , (.:?)
   , (.!=)
   )
-import Data.Text (Text, pack, unpack, uncons)
+import Data.Text (Text)
+import Data.Monoid (Monoid(..))
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.GlobPattern (GlobPattern)
+import System.DirWatch.ShellEnv (ShellEnv)
 
 data Config p h
   = Config {
@@ -38,8 +38,6 @@ data Config p h
 
 type SerializableConfig = Config Code HandlerCode
 type SerializableWatcher = Watcher Code HandlerCode
-
-newtype ShellEnv = ShellEnv [EnvItem] deriving (Show, Eq)
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
@@ -53,29 +51,11 @@ instance FromJSON SerializableConfig where
   parseJSON (Object v)
     = Config <$>
       v .:? "pluginDirs" .!= [] <*>
-      v .:? "env" .!= ShellEnv [] <*>
+      v .:? "env" .!= mempty <*>
       v .:  "watchers"
   parseJSON _ = fail "Expected an object"
 
-data EnvItem
-  = EnvSet    {envKey :: String, envVal :: String}
-  | EnvAppend {envKey :: String, envVal :: String}
-  deriving (Show, Eq)
 
-instance ToJSON ShellEnv where
-  toJSON (ShellEnv items) = object $ map toPair items
-    where toPair (EnvSet k v)    = (pack k, toJSON v)
-          toPair (EnvAppend k v) = (pack ('+':k), toJSON v)
-
-instance FromJSON ShellEnv where
-  parseJSON (Object o)
-    = ShellEnv <$> mapM fromPair (HM.toList o)
-    where
-      fromPair (k, v) = case uncons k of
-        Just ('+',k') -> EnvAppend <$> pure (unpack k') <*> parseJSON v
-        Just _        -> EnvSet    <$> pure (unpack k)  <*> parseJSON v
-        Nothing       -> fail "Unexpected empty jey for ShellEnv"
-  parseJSON _ = fail "Expected for env"
 
 data Watcher p h
   = Watcher {

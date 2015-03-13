@@ -2,6 +2,8 @@ module System.DirWatchSpec (main, spec) where
 
 import Test.Hspec
 import System.DirWatch
+import System.DirWatch.ShellEnv (envSet, envAppend)
+import Data.Monoid (mempty)
 
 main :: IO ()
 main = hspec spec
@@ -18,10 +20,11 @@ spec = do
         Left e  -> expectationFailure $ show e
 
     it "env is parsed correctly" $ withValidConfig eConfig $ \config -> do
-      let ShellEnv env = cfgShellEnv config
-      env `shouldMatchList` [ EnvAppend "PATH" "/opt/foo"
-                            , EnvSet "FOO" "bar"
-                            ]
+      let expected = envSet    "FOO"  "bar"
+                   $ envAppend "PATH" "/opt/foo"
+                   $ mempty
+          env      = cfgShellEnv config
+      env `shouldBe` expected
 
 withValidConfig :: Show a => Either a t -> (t -> Expectation) -> Expectation
 withValidConfig (Right c) act = act c

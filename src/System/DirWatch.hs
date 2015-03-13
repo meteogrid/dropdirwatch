@@ -1,7 +1,5 @@
 module System.DirWatch (
     Config (..)
-  , ShellEnv (..)
-  , EnvItem (..)
   , compileConfig
   , decodeFileEither
 ) where
