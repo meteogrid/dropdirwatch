@@ -8,6 +8,8 @@ module System.DirWatch.Config (
   , ProcessorCode (..)
   , SerializableConfig
   , SerializableWatcher
+  , RunnableWatcher
+  , RunnableConfig
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
@@ -22,12 +24,13 @@ import Data.Aeson (
   , (.:?)
   , (.!=)
   )
-import Data.Text (Text)
 import Data.Monoid (Monoid(..))
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.GlobPattern (GlobPattern)
 import System.DirWatch.ShellEnv (ShellEnv)
+import System.DirWatch.Processor (Processor)
+import System.DirWatch.PreProcessor (PreProcessor)
 
 data Config p h
   = Config {
@@ -38,6 +41,9 @@ data Config p h
 
 type SerializableConfig = Config Code ProcessorCode
 type SerializableWatcher = Watcher Code ProcessorCode
+type RunnableConfig  = Config PreProcessor Processor
+type RunnableWatcher = Watcher PreProcessor Processor
+
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
@@ -59,7 +65,7 @@ instance FromJSON SerializableConfig where
 
 data Watcher p h
   = Watcher {
-      wName         :: Text
+      wName         :: String
     , wPaths        :: [GlobPattern]
     , wPreProcessor :: Maybe p
     , wProcessors   :: [h]

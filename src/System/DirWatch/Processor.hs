@@ -40,7 +40,7 @@ import Data.Monoid (mempty, mappend)
 import Data.Typeable (Typeable)
 import System.DirWatch.Logging (MonadLogger, LoggingT, runStderrLoggingT)
 import System.DirWatch.ShellEnv
-import System.DirWatch.Threading (ThreadHandle, Timeout)
+import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle, Timeout)
 import qualified System.DirWatch.Threading as Th
 import System.Exit (ExitCode(..))
 import System.Process (
@@ -68,7 +68,7 @@ data ProcessorEnv
   = ProcessorEnv {
       pConfig   :: ProcessorConfig
     , pProcs    :: IORef [ProcessHandle]
-    , pThreads  :: IORef [ThreadHandle]
+    , pThreads  :: IORef [SomeThreadHandle ProcessorError]
     }
 
 
@@ -90,7 +90,7 @@ runProcessorM cfg act = do
   where
     cleanup env = do
       readIORef (pProcs env) >>= mapM_ killProc
-      readIORef (pThreads env) >>= mapM_ (catchKillErr . Th.killChild)
+      readIORef (pThreads env) >>= mapM_ (catchKillErr . Th.killSomeChild)
     killProc p = catchKillErr $ do
       mExitCode <- getProcessExitCode p
       case mExitCode of
@@ -160,17 +160,18 @@ executeShellCmd ShellCmd{..} = do
     ExitSuccess   -> return (out, err)
     ExitFailure c -> throwE (ShellError c out err)
 
-forkChild :: IO () -> ProcessorM ThreadHandle
+forkChild :: ProcessorM a -> ProcessorM (ThreadHandle (Either ProcessorError a))
 forkChild act = do
-  ret <- liftIO $ Th.forkChild act
+  env <- ask
+  ret <- liftIO $ Th.forkChild (runProcessorEnv env act)
   tList <- asks pThreads
-  liftIO $ atomicModifyIORef' tList (\ts -> (ret:ts,()))
+  liftIO $ atomicModifyIORef' tList (\ts -> (Th.toSomeThreadHandle ret:ts,()))
   return ret
 
-killChild :: ThreadHandle -> ProcessorM ()
+killChild :: ThreadHandle a -> ProcessorM ()
 killChild = liftIO . Th.killChild
 
-waitChild :: ThreadHandle -> Maybe Timeout -> ProcessorM ()
+waitChild :: ThreadHandle a -> Maybe Timeout -> ProcessorM (Maybe a)
 waitChild th = liftIO . Th.waitChild th
 
 data ProcessorError

@@ -1,11 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-module System.DirWatch.Interpreter (
-    RunnableConfig
-  , RunnableWatcher
-  , compileConfig
-) where
+module System.DirWatch.Interpreter (compileConfig) where
 
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
@@ -31,6 +27,8 @@ import System.DirWatch.Config (
   , Watcher(..)
   , SerializableConfig
   , SerializableWatcher
+  , RunnableConfig
+  , RunnableWatcher
   , Code (..)
   , ProcessorCode (..)
   )
@@ -43,9 +41,6 @@ import System.DirWatch.Processor (
 import System.DirWatch.PreProcessor (PreProcessor(..))
 import System.DirWatch.ShellEnv (envSet)
 
-
-type RunnableConfig  = Config PreProcessor Processor
-type RunnableWatcher = Watcher PreProcessor Processor
 
 data CompilerConfig
   = CompilerConfig {

@@ -38,6 +38,7 @@ library
                      , System.DirWatch.Processor
                      , System.DirWatch.PreProcessor
                      , System.DirWatch.Threading
+                     , System.DirWatch.Watcher
   -- other-extensions:    
   build-depends:       base >=4.5 && <5
                      , hinotify
