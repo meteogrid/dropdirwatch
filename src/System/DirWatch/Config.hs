@@ -5,7 +5,7 @@ module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
   , Code (..)
-  , HandlerCode (..)
+  , ProcessorCode (..)
   , SerializableConfig
   , SerializableWatcher
 ) where
@@ -36,8 +36,8 @@ data Config p h
     , cfgWatchers   :: [Watcher p h]
   }
 
-type SerializableConfig = Config Code HandlerCode
-type SerializableWatcher = Watcher Code HandlerCode
+type SerializableConfig = Config Code ProcessorCode
+type SerializableWatcher = Watcher Code ProcessorCode
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
@@ -62,7 +62,7 @@ data Watcher p h
       wName         :: Text
     , wPaths        :: [GlobPattern]
     , wPreProcessor :: Maybe p
-    , wHandlers     :: [h]
+    , wProcessors   :: [h]
   }
 
 instance ToJSON SerializableWatcher where
@@ -71,7 +71,7 @@ instance ToJSON SerializableWatcher where
         "name"         .= wName
       , "paths"        .= wPaths
       , "preprocessor" .= wPreProcessor
-      , "handlers"     .= wHandlers
+      , "processors"   .= wProcessors
     ]
 
 instance FromJSON SerializableWatcher where
@@ -80,7 +80,7 @@ instance FromJSON SerializableWatcher where
         v .:   "name" <*>
         v .:   "paths" <*>
         v .:?  "preprocessor" <*>
-        v .:?  "handlers" .!= []
+        v .:?  "processors" .!= []
   parseJSON _ = fail "Expected an object"
 
 data Code
@@ -110,16 +110,16 @@ instance FromJSON Code where
              _     -> fail "\"import\" should be <module>:<symbol>")
   parseJSON _ = fail "Expected an object"
 
-data HandlerCode
-  = HandlerCode  Code
-  | HandlerShell [String]
+data ProcessorCode
+  = ProcessorCode  Code
+  | ProcessorShell [String]
   deriving Show
 
-instance ToJSON HandlerCode where
-  toJSON (HandlerCode  c) = toJSON c
-  toJSON (HandlerShell c) = object ["shell" .= toJSON c]
+instance ToJSON ProcessorCode where
+  toJSON (ProcessorCode  c) = toJSON c
+  toJSON (ProcessorShell c) = object ["shell" .= toJSON c]
 
-instance FromJSON HandlerCode where
+instance FromJSON ProcessorCode where
   parseJSON o@(Object v)
-    = (HandlerShell <$> v .: "shell") <|> (HandlerCode <$> parseJSON o)
+    = (ProcessorShell <$> v .: "shell") <|> (ProcessorCode <$> parseJSON o)
   parseJSON _ = fail "Expected an object"

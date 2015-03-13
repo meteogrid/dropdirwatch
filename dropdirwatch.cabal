@@ -35,8 +35,9 @@ library
                      , System.DirWatch.ShellEnv
                      , System.DirWatch.Logging
                      , System.DirWatch.Interpreter
-                     , System.DirWatch.Handler
+                     , System.DirWatch.Processor
                      , System.DirWatch.PreProcessor
+                     , System.DirWatch.Threading
   -- other-extensions:    
   build-depends:       base >=4.5 && <5
                      , hinotify

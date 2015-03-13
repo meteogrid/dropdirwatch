@@ -32,10 +32,10 @@ import System.DirWatch.Config (
   , SerializableConfig
   , SerializableWatcher
   , Code (..)
-  , HandlerCode (..)
+  , ProcessorCode (..)
   )
-import System.DirWatch.Handler (
-    Handler(..)
+import System.DirWatch.Processor (
+    Processor(..)
   , ShellCmd (..)
   , shellCmd
   , executeShellCmd
@@ -44,8 +44,8 @@ import System.DirWatch.PreProcessor (PreProcessor(..))
 import System.DirWatch.ShellEnv (envSet)
 
 
-type RunnableConfig  = Config PreProcessor Handler
-type RunnableWatcher = Watcher PreProcessor Handler
+type RunnableConfig  = Config PreProcessor Processor
+type RunnableWatcher = Watcher PreProcessor Processor
 
 data CompilerConfig
   = CompilerConfig {
@@ -69,16 +69,16 @@ compileWatcher w = do
   mP <- case wPreProcessor w of
           Nothing -> return Nothing
           Just p  -> fmap (Just . PreProcessor) $ compileCode p
-  hs <- mapM compileHandler (wHandlers w)
-  return $ w {wPreProcessor=mP, wHandlers=hs}
+  hs <- mapM compileProcessor (wProcessors w)
+  return $ w {wPreProcessor=mP, wProcessors=hs}
 
-compileHandler :: HandlerCode -> Compiler Handler
-compileHandler (HandlerCode code)  = fmap Handler (compileCode code)
-compileHandler (HandlerShell cmds) = return (executeShellCommands cmds)
+compileProcessor :: ProcessorCode -> Compiler Processor
+compileProcessor (ProcessorCode code)  = fmap Processor (compileCode code)
+compileProcessor (ProcessorShell cmds) = return (executeShellCommands cmds)
 
 
-executeShellCommands :: [String] -> Handler
-executeShellCommands cmds = Handler $ \filename content -> do
+executeShellCommands :: [String] -> Processor
+executeShellCommands cmds = Processor $ \filename content -> do
   let env  = envSet "FILENAME" filename mempty
       sh s = executeShellCmd $ (shellCmd s) {shInput=Just content, shEnv=env}
   mapM_ sh cmds

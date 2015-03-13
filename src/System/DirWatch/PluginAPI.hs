@@ -11,5 +11,5 @@ import Data.Aeson as API (
   , (.!=)
   )
 import System.FilePath.Posix as API
-import System.DirWatch.Handler as API hiding (HandlerEnv)
+import System.DirWatch.Processor as API hiding (ProcessorConfig)
 import System.DirWatch.ShellEnv as API (envSet, envAppend)
