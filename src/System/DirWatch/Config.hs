@@ -130,7 +130,10 @@ instance ToJSON Code where
 
 instance FromJSON Code where
   parseJSON (Object v)
-      = (EvalCode <$> v .: "eval")
+      = (do c <- v .: "eval"
+            if HM.size v == 1
+              then return $ EvalCode c
+              else fail "\"eval\" expects no arguments")
     <|> (do i <- v .: "import"
             case L.splitOn ":" i of
              [m,s] -> return (ImportCode m s (HM.delete "import" v))
