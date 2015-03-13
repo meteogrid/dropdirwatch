@@ -2,7 +2,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.DirWatch.Interpreter (
-  compileConfig
+    RunnableConfig
+  , RunnableWatcher
+  , compileConfig
 ) where
 
 import Control.Monad (forM_)
@@ -36,7 +38,22 @@ import System.Process (
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.List as L
 import System.Exit (ExitCode(..))
-import System.DirWatch.Config
+import System.DirWatch.Config (
+    Config(..)
+  , Watcher(..)
+  , ShellEnv(..)
+  , EnvItem (..)
+  , SerializableConfig
+  , SerializableWatcher
+  , Code (..)
+  , HandlerCode (..)
+  )
+import System.DirWatch.Handler (Handler(..))
+import System.DirWatch.PreProcessor (PreProcessor(..))
+
+
+type RunnableConfig  = Config PreProcessor Handler
+type RunnableWatcher = Watcher PreProcessor Handler
 
 data CompilerConfig
   = CompilerConfig {

@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 module System.DirWatch.Config (
     Config (..)
@@ -9,12 +8,8 @@ module System.DirWatch.Config (
   , EnvItem (..)
   , ShellEnv (..)
   , HandlerCode (..)
-  , Handler (..)
-  , PreProcessor (..)
   , SerializableConfig
-  , RunnableConfig
   , SerializableWatcher
-  , RunnableWatcher
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>), pure)
@@ -30,10 +25,8 @@ import Data.Aeson (
   , (.!=)
   )
 import Data.Text (Text, pack, unpack, uncons)
-import Data.Typeable (Typeable)
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
-import qualified Data.ByteString.Lazy as LBS
 import System.FilePath.GlobPattern (GlobPattern)
 
 data Config p h
@@ -44,10 +37,7 @@ data Config p h
   }
 
 type SerializableConfig = Config Code HandlerCode
-type RunnableConfig      = Config PreProcessor Handler
-
 type SerializableWatcher = Watcher Code HandlerCode
-type RunnableWatcher     = Watcher PreProcessor Handler
 
 newtype ShellEnv = ShellEnv [EnvItem] deriving (Show, Eq)
 
@@ -153,14 +143,3 @@ instance FromJSON HandlerCode where
   parseJSON o@(Object v)
     = (HandlerShell <$> v .: "shell") <|> (HandlerCode <$> parseJSON o)
   parseJSON _ = fail "Expected an object"
-
-
-newtype Handler
-  = Handler {
-      handle :: FilePath -> LBS.ByteString -> IO ()
-  } deriving Typeable
-
-newtype PreProcessor
-  = PreProcessor {
-      preProcess :: FilePath -> LBS.ByteString -> [(FilePath,LBS.ByteString)]
-  } deriving Typeable

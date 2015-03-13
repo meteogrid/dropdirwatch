@@ -33,9 +33,10 @@ library
                      , System.DirWatch.PluginAPI
   other-modules:       System.DirWatch.Config
                      , System.DirWatch.Interpreter
-                     , System.DirWatch.Types
+                     , System.DirWatch.Handler
+                     , System.DirWatch.PreProcessor
   -- other-extensions:    
-  build-depends:       base >=4.7 && <5
+  build-depends:       base >=4.5 && <5
                      , hinotify
                      , yaml
                      , hint
