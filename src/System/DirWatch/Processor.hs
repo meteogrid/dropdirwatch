@@ -7,7 +7,6 @@ module System.DirWatch.Processor (
     Processor
   , PreProcessor
   , ProcessorM
-  , ProcessorConfig (..)
   , ProcessorError (..)
   , ShellCmd (..)
   , shellCmd
@@ -35,7 +34,7 @@ import Control.Exception.Lifted as E (
   , finally
   , bracket
   )
-import Control.Monad.Reader (MonadReader(ask), asks, ReaderT, runReaderT)
+import Control.Monad.Reader (MonadReader(..), asks, ReaderT, runReaderT)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
 import qualified Control.Monad.Trans.Except as E
@@ -85,15 +84,15 @@ instance Default ProcessorConfig where
   
 newtype ProcessorM a
   = ProcessorM {
-      unProcessorM :: ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO )) a
+      unProcessorM :: ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO)) a
       }
-  deriving ( Functor, Applicative, Monad, MonadLogger, MonadReader ProcessorEnv
-           , MonadIO, MonadBase IO, Typeable)
+  deriving ( Functor, Applicative, Monad, MonadLogger, MonadIO, MonadBase IO
+           , Typeable)
 
 instance MonadBaseControl IO ProcessorM where
    type StM ProcessorM a = Either ProcessorError a
    liftBaseWith f = do
-     env <- ask
+     env <- ProcessorM ask
      liftIO $ f (runProcessorEnv env)
    restoreM = either throwE return
 
@@ -137,7 +136,7 @@ createProcess
   -> ProcessorM (Maybe Handle, Maybe Handle, Maybe Handle, ProcessHandle)
 createProcess cp = do
   ret@(_,_,_,ph) <- liftIO $ P.createProcess cp
-  pList <- asks pProcs
+  pList <- ProcessorM (asks pProcs)
   liftIO $ atomicModifyIORef' pList (\ps -> (ph:ps,()))
   return ret
 
@@ -146,7 +145,8 @@ waitForProcess = liftIO . P.waitForProcess
   
 executeShellCmd :: ShellCmd -> ProcessorM (BS.ByteString, BS.ByteString)
 executeShellCmd ShellCmd{..} = do
-  env <- fmap (shellEnvToEnv . (`mappend` shEnv)) (asks (pShellEnv . pConfig))
+  env <- ProcessorM $
+    fmap (shellEnvToEnv . (`mappend` shEnv)) (asks (pShellEnv . pConfig))
   let process = (shell shCmd)
         { std_in  = maybe Inherit (const CreatePipe) shInput
         , std_out = CreatePipe
@@ -180,9 +180,9 @@ withFile fname mode
 
 forkChild :: ProcessorM a -> ProcessorM (ThreadHandle (Either ProcessorError a))
 forkChild act = do
-  env <- ask
+  env <- ProcessorM ask
   ret <- liftIO $ Th.forkChild (runProcessorEnv env act)
-  tList <- asks pThreads
+  tList <- ProcessorM (asks pThreads)
   liftIO $ atomicModifyIORef' tList (\ts -> (Th.toSomeThreadHandle ret:ts,()))
   return ret
 
@@ -212,7 +212,7 @@ throwE = ProcessorM . E.throwE
 
 catchE :: ProcessorM a -> (ProcessorError -> ProcessorM a) -> ProcessorM a
 catchE act handler = do
-  env <- ask
+  env <- ProcessorM ask
   either handler return =<< liftIO (runProcessorEnv env act)
 
 intercept
