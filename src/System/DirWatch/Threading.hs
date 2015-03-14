@@ -8,6 +8,7 @@ module System.DirWatch.Threading (
   , killChild
   , killSomeChild
   , waitChild
+  , tryWaitChild
 ) where
 
 import Control.Exception (throw)
@@ -16,7 +17,6 @@ import Control.Concurrent (
     ThreadId
   , killThread
   , forkFinally
-  , threadDelay
   , mkWeakThreadId
   )
 import Control.Concurrent.MVar (
@@ -41,19 +41,11 @@ killChild :: ThreadHandle a -> IO ()
 killChild (ThreadHandle (tid,_))
   = maybe (return ()) killThread =<< deRefWeak tid
 
-waitChild :: ThreadHandle a -> Maybe Timeout -> IO (Maybe a)
-waitChild (ThreadHandle (_,mvar)) Nothing = fmap Just (takeMVar mvar)
-waitChild (ThreadHandle (_,mvar)) (Just t) = go t
-  where
-    delay = 1000
-    go n | n<=0 = return Nothing
-    go n = do
-      tookIt <- tryTakeMVar mvar
-      case tookIt of
-        Nothing -> do
-          threadDelay delay
-          go (n-delay)
-        Just a -> return (Just a)
+waitChild :: ThreadHandle a -> IO a
+waitChild (ThreadHandle (_,mvar)) = takeMVar mvar
+
+tryWaitChild  :: ThreadHandle a -> IO (Maybe a)
+tryWaitChild (ThreadHandle (_,mvar)) = tryTakeMVar mvar
 
 data SomeThreadHandle e = forall a. SomeTH (ThreadHandle (Either e a))
 

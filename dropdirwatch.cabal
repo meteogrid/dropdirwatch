@@ -36,7 +36,6 @@ library
                      , System.DirWatch.Logging
                      , System.DirWatch.Interpreter
                      , System.DirWatch.Processor
-                     , System.DirWatch.PreProcessor
                      , System.DirWatch.Threading
                      , System.DirWatch.Watcher
   -- other-extensions:    
@@ -57,8 +56,10 @@ library
                      , process
                      , transformers
                      , transformers-compat
+                     , transformers-base
                      , mtl
                      , monad-logger
+                     , monad-control
                      , data-default
 
   default-language:    Haskell2010
@@ -97,8 +98,10 @@ test-suite spec
     , process
     , transformers
     , transformers-compat
+    , transformers-base
     , mtl
     , monad-logger
+    , monad-control
     , data-default
   default-language:    Haskell2010
 

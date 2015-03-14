@@ -1,8 +1,11 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards #-}
 module System.DirWatch.Processor (
-    Processor (..)
+    Processor
+  , PreProcessor
   , ProcessorM
   , ProcessorConfig (..)
   , ProcessorError (..)
@@ -14,21 +17,26 @@ module System.DirWatch.Processor (
   , forkChild
   , killChild
   , waitChild
+  , tryWaitChild
   , liftIO
   , runProcessorM
   , throwE
   , catchE
+  , withFile
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
+import Control.Monad.Trans.Control
 import Control.Exception.Lifted as E (
     Exception
   , SomeException
   , handle
   , catch
   , finally
+  , bracket
   )
 import Control.Monad.Reader (MonadReader(ask), asks, ReaderT, runReaderT)
+import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
 import qualified Control.Monad.Trans.Except as E
 import Control.Monad.IO.Class (MonadIO(liftIO))
@@ -40,9 +48,10 @@ import Data.Monoid (mempty, mappend)
 import Data.Typeable (Typeable)
 import System.DirWatch.Logging (MonadLogger, LoggingT, runStderrLoggingT)
 import System.DirWatch.ShellEnv
-import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle, Timeout)
+import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
 import qualified System.DirWatch.Threading as Th
 import System.Exit (ExitCode(..))
+import System.IO (IOMode, hClose, openFile)
 import System.Process (
     CreateProcess(..)
   , ProcessHandle
@@ -54,10 +63,8 @@ import System.Process (
 import qualified System.Process as P (createProcess, waitForProcess)
 import System.IO (Handle)
 
-newtype Processor
-  = Processor {
-      process :: FilePath -> LBS.ByteString -> ProcessorM ()
-  } deriving Typeable
+type PreProcessor = FilePath -> LBS.ByteString -> [(FilePath,LBS.ByteString)]
+type Processor = FilePath -> LBS.ByteString -> ProcessorM ()
 
 data ProcessorConfig
   = ProcessorConfig {
@@ -81,7 +88,14 @@ newtype ProcessorM a
       unProcessorM :: ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO )) a
       }
   deriving ( Functor, Applicative, Monad, MonadLogger, MonadReader ProcessorEnv
-           , MonadIO, Typeable)
+           , MonadIO, MonadBase IO, Typeable)
+
+instance MonadBaseControl IO ProcessorM where
+   type StM ProcessorM a = Either ProcessorError a
+   liftBaseWith f = do
+     env <- ask
+     liftIO $ f (runProcessorEnv env)
+   restoreM = either throwE return
 
 runProcessorM :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
 runProcessorM cfg act = do
@@ -160,6 +174,10 @@ executeShellCmd ShellCmd{..} = do
     ExitSuccess   -> return (out, err)
     ExitFailure c -> throwE (ShellError c out err)
 
+withFile :: FilePath -> IOMode -> (Handle -> ProcessorM a) -> ProcessorM a
+withFile fname mode
+  = bracket (liftIO (openFile fname mode)) (liftIO . hClose)
+
 forkChild :: ProcessorM a -> ProcessorM (ThreadHandle (Either ProcessorError a))
 forkChild act = do
   env <- ask
@@ -171,8 +189,11 @@ forkChild act = do
 killChild :: ThreadHandle a -> ProcessorM ()
 killChild = liftIO . Th.killChild
 
-waitChild :: ThreadHandle a -> Maybe Timeout -> ProcessorM (Maybe a)
-waitChild th = liftIO . Th.waitChild th
+waitChild :: ThreadHandle a -> ProcessorM a
+waitChild = liftIO . Th.waitChild
+
+tryWaitChild :: ThreadHandle a -> ProcessorM (Maybe a)
+tryWaitChild = liftIO . Th.tryWaitChild
 
 data ProcessorError
   = ProcessorException SomeException
