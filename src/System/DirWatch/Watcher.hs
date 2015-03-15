@@ -4,14 +4,17 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module System.DirWatch.Watcher where
+module System.DirWatch.Watcher (
+    WatcherState
+  , StopCond
+  , runWatchLoop
+  , mkStopCond
+  , endLoop
+) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
-import Control.Exception (SomeException, try)
-import Control.Concurrent.MVar (
-    MVar
-  , takeMVar
-  )
+import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
+import Control.Exception (try, finally)
 import Control.Monad (forM_, forM, void)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
@@ -22,7 +25,6 @@ import Control.Monad.State.Strict (
   , StateT
   , runStateT
   )
-import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
@@ -49,6 +51,7 @@ import System.Directory (createDirectoryIfMissing, renameFile)
 import System.FilePath.GlobPattern ((~~))
 import System.FilePath.Posix (joinPath, takeDirectory, normalise)
 import System.IO (IOMode(ReadMode))
+import System.IO.Error (tryIOError)
 import System.DirWatch.Config (
     RunnableConfig
   , RunnableWatcher
@@ -64,15 +67,14 @@ import System.DirWatch.Threading (
   , forkChild
   , waitChild
   , tryWaitSomeChild
-  , killChild
   )
 import System.DirWatch.Logging (
     LoggingT
   , MonadLogger
   , runStderrLoggingT
-  , logDebug
   , logInfo
   , logError
+  , logWarn
   , fromStrings
   )
 import System.DirWatch.Processor (
@@ -99,11 +101,11 @@ data ChanMessage
   = Work RunnableWatcher FilePath
   | WakeUp
   | Finish
+  deriving Show
 
 data WatcherEnv
   = WatcherEnv {
       wConfig   :: RunnableConfig
-    , wStopCond :: StopCond
     , wChan     :: Chan ChanMessage
     , wInotify  :: INotify
   }
@@ -151,19 +153,21 @@ runWatcherEnv env state
   . runStderrLoggingT
   . unWatcherM
 
-runWatcherM
-  :: RunnableConfig -> Maybe WatcherState -> StopCond -> WatcherM a
-  -> IO (a,WatcherState)
-runWatcherM cfg mState stopCond loopFunc = withINotify $ \ino -> do
-  env <- WatcherEnv <$> pure cfg <*> pure stopCond <*> newChan <*> pure ino
+runWatchLoop
+  :: RunnableConfig -> Maybe WatcherState -> StopCond -> IO WatcherState
+runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
+  env <- WatcherEnv <$> pure cfg <*> newChan <*> pure ino
   let state = fromMaybe mempty mState
-  loopth <- forkChild $ runWatcherEnv env state loopFunc
-  wakerth  <- forkChild  (waker (wChan env))
+  loopth <- forkChild $ runWatcherEnv env state (setupWatches >> loop)
   takeMVar stopCond
   writeChan (wChan env) Finish
-  ret <- waitChild loopth
-  killChild wakerth
-  return ret
+  fmap snd $ waitChild loopth
+
+endLoop :: StopCond -> IO ()
+endLoop mvar = putMVar mvar ()
+
+mkStopCond :: IO StopCond
+mkStopCond = newEmptyMVar
 
 setupWatches :: WatcherM ()
 setupWatches = do
@@ -173,7 +177,8 @@ setupWatches = do
     forM_ (wPaths watcher) $ \globPattern -> do
       let baseDir  = takePatternDirectory globPattern
           absPath p = joinPath [baseDir, p]
-      addIWatch baseDir $ \event -> do
+          name = wName watcher
+      mError <- addIWatch baseDir $ \event -> do
         case event of
           MovedIn{..} | absPath filePath ~~ globPattern
                       , not isDirectory ->
@@ -184,31 +189,35 @@ setupWatches = do
                 writeChan chan $ Work watcher (absPath filePath)
               _ -> return ()
           _ -> return ()
+      case mError of
+        Just e ->
+          $(logWarn) $ fromStrings ["Could not watch ", baseDir, " for "
+                                   , name, ": ", show e]
+        Nothing ->
+          $(logInfo) $ fromStrings ["Watching ", baseDir, " for ", name]
 
 loop :: WatcherM ()
 loop = do
   handleFinishedFiles
+  handleRetries
   msg <- getMessage
   case msg of
-    Work wch file -> runWatcherOnFile wch file >> loop
+    Work wch file -> do
+      $(logInfo) $ fromStrings ["File ", file, " arrived"]
+      runWatcherOnFile wch file
+      loop
     WakeUp        -> loop
     Finish        -> return ()
 
-addIWatch :: FilePath -> (Event -> IO ()) -> WatcherM ()
+addIWatch :: FilePath -> (Event -> IO ()) -> WatcherM (Maybe IOError)
 addIWatch dir wch = do
-  $(logDebug) $ fromStrings ["Watching ", dir]
   ino <- asks wInotify
-  void $ liftIO $ addWatch ino watchedEvents dir wch
+  result <- liftIO . try $ addWatch ino watchedEvents dir wch
+  either (return . Just) (const (return Nothing)) result
 
 
 getMessage :: WatcherM ChanMessage
 getMessage = asks wChan >>= liftIO . readChan
-
-waker :: Chan ChanMessage -> IO ()
-waker chan = do
-  threadDelay 1000000
-  writeChan chan WakeUp
-  waker chan
 
 handleFinishedFiles :: WatcherM ()
 handleFinishedFiles = do
@@ -218,12 +227,15 @@ handleFinishedFiles = do
     remainingPs <- fmap catMaybes $ forM runningPs $ \fp -> do
       result <- liftIO (tryWaitSomeChild (fpHandle fp))
       case result of
-        Nothing      -> return Nothing
-        Just Nothing -> return (Just fp)
+        Nothing      -> return (Just fp)
+        Just Nothing -> return Nothing
         Just (Just err) ->
           registerFailure fname (fpWatcher fp) err >> return Nothing
     if null remainingPs
-      then archiveFile fname >> return Nothing
+      then do
+        $(logInfo) $ fromStrings ["Finished processing ", fname]
+        archiveFile fname
+        return Nothing
       else return (Just (fname, remainingPs))
   put state {wThreads=HM.fromList remaining}
 
@@ -232,18 +244,21 @@ archiveFile fname = do
   mArchiveDir <- asks (cfgArchiveDir . wConfig)
   case mArchiveDir of
     Just archiveDir -> do
-      result <- liftIO . try $ do
-        time <- getCurrentTime
-        let dest    = archiveDestination archiveDir (utctDay time) fname
-            destDir = takeDirectory dest
-        createDirectoryIfMissing True destDir
-        renameFile fname dest
+      time <- liftIO getCurrentTime
+      let dest    = archiveDestination archiveDir (utctDay time) fname
+          destDir = takeDirectory dest
+      $(logInfo) $ fromStrings ["Archiving ", fname, " -> ", dest]
+      result <- liftIO . tryIOError $
+        createDirectoryIfMissing True destDir >> renameFile fname dest
       case result of
-        Left (e :: SomeException) -> do
+        Left e -> do
           $(logError) $ fromStrings ["Could not archive ", fname, ": ", show e]
           return ()
         Right () -> return ()
     Nothing -> return ()
+
+handleRetries :: WatcherM ()
+handleRetries = return () -- TODO
 
 registerFailure :: FilePath -> RunnableWatcher -> ProcessorError -> WatcherM ()
 registerFailure fname wch err = do
@@ -255,8 +270,9 @@ registerFailure fname wch err = do
 runWatcherOnFile :: RunnableWatcher -> FilePath -> WatcherM ()
 runWatcherOnFile wch@Watcher{..} filename = do
   cfg <- processorConfig
+  chan <- asks wChan
   fp <- liftIO $ do
-    th <- forkChild (runProcessorM cfg action)
+    th <- forkChild $ finally (runProcessorM cfg action) (writeChan chan WakeUp)
     start <- getPOSIXTime
     return FileProcessor { fpHandle  = toSomeThreadHandle th
                          , fpStart   = start

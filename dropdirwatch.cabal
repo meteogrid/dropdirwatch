@@ -112,7 +112,7 @@ test-suite spec
 
 executable dropdirwatch
   ghc-options:
-      -Wall
+      -Wall -threaded -rtsopts
   hs-source-dirs:
       exe
   main-is:
@@ -120,4 +120,6 @@ executable dropdirwatch
   build-depends:
       base
     , dropdirwatch
+    , transformers
+    , hinotify
   default-language:    Haskell2010
