@@ -1,9 +1,11 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module System.DirWatch.Watcher where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
+import Control.Exception (SomeException, try)
 import Control.Concurrent.MVar (
     MVar
   , takeMVar
@@ -29,8 +31,9 @@ import Data.HashMap.Strict as HM (
   , toList
   , fromList
   )
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
+import Data.Time.Clock (getCurrentTime, utctDay)
 import System.INotify (
     INotify
   , Event (..)
@@ -38,8 +41,9 @@ import System.INotify (
   , withINotify
   , addWatch
   )
+import System.Directory (createDirectoryIfMissing, renameFile)
 import System.FilePath.GlobPattern ((~~))
-import System.FilePath.Posix (joinPath, normalise)
+import System.FilePath.Posix (joinPath, takeDirectory, normalise)
 import System.IO (IOMode(ReadMode))
 import System.DirWatch.Config (
     RunnableConfig
@@ -48,7 +52,7 @@ import System.DirWatch.Config (
   , Watcher(..)
   , getCompiled
   )
-import System.DirWatch.Util (patternDir)
+import System.DirWatch.Util (takePatternDirectory, archiveDestination)
 
 import System.DirWatch.Threading (
     SomeThreadHandle
@@ -136,10 +140,13 @@ runWatcherEnv env state
   . runStderrLoggingT
   . unWatcherM
 
-runWatcherM :: RunnableConfig -> StopCond -> WatcherM a -> IO (a,WatcherState)
-runWatcherM cfg stopCond loopFunc = withINotify $ \ino -> do
+runWatcherM
+  :: RunnableConfig -> Maybe WatcherState -> StopCond -> WatcherM a
+  -> IO (a,WatcherState)
+runWatcherM cfg mState stopCond loopFunc = withINotify $ \ino -> do
   env <- WatcherEnv <$> pure cfg <*> pure stopCond <*> newChan <*> pure ino
-  loopth <- forkChild $ runWatcherEnv env mempty loopFunc
+  let state = fromMaybe mempty mState
+  loopth <- forkChild $ runWatcherEnv env state loopFunc
   wakerth  <- forkChild  (waker (wChan env))
   takeMVar stopCond
   writeChan (wChan env) Finish
@@ -153,7 +160,7 @@ setupWatches = do
   chan <- asks wChan
   forM_ watchers $ \watcher -> do
     forM_ (wPaths watcher) $ \globPattern -> do
-      let baseDir  = patternDir globPattern
+      let baseDir  = takePatternDirectory globPattern
           absPath p = joinPath [baseDir, p]
       addIWatch baseDir $ \event -> do
         case event of
@@ -210,7 +217,22 @@ handleFinishedFiles = do
   put state {wThreads=HM.fromList remaining}
 
 archiveFile :: FilePath -> WatcherM ()
-archiveFile _ = return () -- TODO
+archiveFile fname = do
+  mArchiveDir <- asks (cfgArchiveDir . wConfig)
+  case mArchiveDir of
+    Just archiveDir -> do
+      result <- liftIO . try $ do
+        time <- getCurrentTime
+        let dest    = archiveDestination archiveDir (utctDay time) fname
+            destDir = takeDirectory dest
+        createDirectoryIfMissing True destDir
+        renameFile fname dest
+      case result of
+        Left (e :: SomeException) -> do
+          $(logError) $ fromStrings ["Could not archive ", fname, ": ", show e]
+          return ()
+        Right () -> return ()
+    Nothing -> return ()
 
 registerFailure :: FilePath -> RunnableWatcher -> ProcessorError -> WatcherM ()
 registerFailure fname wch err = do

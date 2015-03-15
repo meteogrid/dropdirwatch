@@ -37,6 +37,7 @@ import System.DirWatch.Processor (PreProcessor, Processor)
 data Config w
   = Config {
       cfgPluginDirs :: [FilePath]
+    , cfgArchiveDir :: Maybe FilePath
     , cfgShellEnv   :: ShellEnv
     , cfgWatchers   :: [w]
   } deriving Show
@@ -50,15 +51,17 @@ type RunnableWatcher
 instance ToJSON SerializableConfig where
   toJSON Config{..}
     = object [
-      "watchers"   .= cfgWatchers
-    , "pluginDirs" .= cfgPluginDirs
+      "archiveDir" .= cfgArchiveDir
     , "env"        .= cfgShellEnv
+    , "pluginDirs" .= cfgPluginDirs
+    , "watchers"   .= cfgWatchers
     ]
 
 instance FromJSON SerializableConfig where
   parseJSON (Object v)
     = Config <$>
       v .:? "pluginDirs" .!= [] <*>
+      v .:? "archiveDir" <*>
       v .:? "env" .!= mempty <*>
       v .:  "watchers"
   parseJSON _ = fail "Expected an object"
