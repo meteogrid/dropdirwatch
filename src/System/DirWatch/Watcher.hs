@@ -29,8 +29,8 @@ import System.INotify (
   , withINotify
   , addWatch
   )
-import System.FilePath.GlobPattern (GlobPattern, (~~))
-import System.FilePath.Posix (joinPath, splitPath)
+import System.FilePath.GlobPattern ((~~))
+import System.FilePath.Posix (joinPath)
 import System.IO (IOMode(ReadMode))
 import System.DirWatch.Config (
     RunnableConfig
@@ -38,6 +38,8 @@ import System.DirWatch.Config (
   , Config(..)
   , Watcher(..)
   )
+import System.DirWatch.Util (enumerate, patternDir)
+
 import System.DirWatch.Threading (
     ThreadHandle
   , SomeThreadHandle
@@ -156,15 +158,8 @@ waker chan = do
 
 cleanupProcessors :: WatcherM ()
 cleanupProcessors = return ()
-          
-
-patternDir :: GlobPattern -> FilePath
-patternDir = joinPath . takeWhile notWildcard . splitPath
-  where
-    notWildcard p = all (`notElem` p) "?*[]()|"
                            
               
-
 runWatcherOnFile :: RunnableWatcher -> FilePath -> ProcessorM ()
 runWatcherOnFile Watcher{..} filename = do
   $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
@@ -183,9 +178,6 @@ runWatcherOnFile Watcher{..} filename = do
             "Processor #", show ix, " from ", wName, " failed: ", show err]
           return ()
         Right _ -> return ()
-
-enumerate :: Int -> [a] -> [(Int,a)]
-enumerate x0 = zip [x0..]
 
 forkProcessor :: FilePath -> ProcessorM () -> WatcherM ()
 forkProcessor filename act = do

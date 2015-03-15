@@ -7,6 +7,7 @@ module System.DirWatch.Processor (
     Processor
   , PreProcessor
   , ProcessorM
+  , ProcessorConfig (..)
   , ProcessorError (..)
   , ShellCmd (..)
   , shellCmd
@@ -84,10 +85,18 @@ instance Default ProcessorConfig where
   
 newtype ProcessorM a
   = ProcessorM {
-      unProcessorM :: ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO)) a
+      unProcessorM :: ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO )) a
       }
-  deriving ( Functor, Applicative, Monad, MonadLogger, MonadIO, MonadBase IO
-           , Typeable)
+  deriving ( Functor, Applicative, Monad, MonadLogger
+           , MonadIO, MonadBase IO, Typeable)
+
+instance (MonadReader ProcessorConfig) ProcessorM where
+  ask = ProcessorM (asks pConfig)
+  local f act = do
+    env <- ProcessorM ask
+    let env' = env {pConfig = f (pConfig env)}
+    liftIO (runProcessorEnv env' act) >>= restoreM
+    
 
 instance MonadBaseControl IO ProcessorM where
    type StM ProcessorM a = Either ProcessorError a
@@ -145,8 +154,7 @@ waitForProcess = liftIO . P.waitForProcess
   
 executeShellCmd :: ShellCmd -> ProcessorM (BS.ByteString, BS.ByteString)
 executeShellCmd ShellCmd{..} = do
-  env <- ProcessorM $
-    fmap (shellEnvToEnv . (`mappend` shEnv)) (asks (pShellEnv . pConfig))
+  env <- fmap (shellEnvToEnv . (`mappend` shEnv)) (asks pShellEnv)
   let process = (shell shCmd)
         { std_in  = maybe Inherit (const CreatePipe) shInput
         , std_out = CreatePipe
