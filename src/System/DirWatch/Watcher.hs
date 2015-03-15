@@ -30,7 +30,7 @@ import System.INotify (
   , addWatch
   )
 import System.FilePath.GlobPattern ((~~))
-import System.FilePath.Posix (joinPath)
+import System.FilePath.Posix (joinPath, normalise)
 import System.IO (IOMode(ReadMode))
 import System.DirWatch.Config (
     RunnableConfig
@@ -120,14 +120,15 @@ setupWatches = do
     forM_ (wPaths watcher) $ \globPattern -> do
       let baseDir  = patternDir globPattern
           absPath p = joinPath [baseDir, p]
-      addIWatch baseDir $ \event -> runStderrLoggingT $ do
+      addIWatch baseDir $ \event -> do
         case event of
-          MovedIn{..} | absPath filePath ~~ globPattern ->
-            liftIO $ writeChan chan $ Work watcher (absPath filePath)
-          Closed{..} | wasWriteable ->
+          MovedIn{..} | absPath filePath ~~ globPattern
+                      , not isDirectory ->
+            writeChan chan $ Work watcher (absPath filePath)
+          Closed{..} | wasWriteable, not isDirectory ->
             case maybeFilePath of
               Just filePath | absPath filePath ~~ globPattern ->
-                liftIO $ writeChan chan $ Work watcher (absPath filePath)
+                writeChan chan $ Work watcher (absPath filePath)
               _ -> return ()
           _ -> return ()
 
@@ -196,4 +197,5 @@ addToRunningProcessors
   -> ThreadHandle (Either ProcessorError a)
   -> ThreadMap
   -> ThreadMap
-addToRunningProcessors path th = insertWith (++) path [toSomeThreadHandle th]
+addToRunningProcessors path th
+  = insertWith (++) (normalise path) [toSomeThreadHandle th]
