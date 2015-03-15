@@ -9,6 +9,7 @@ module System.DirWatch.Threading (
   , killSomeChild
   , waitChild
   , tryWaitChild
+  , tryWaitSomeChild
 ) where
 
 import Control.Exception (throw)
@@ -46,6 +47,14 @@ waitChild (ThreadHandle (_,mvar)) = takeMVar mvar
 
 tryWaitChild  :: ThreadHandle a -> IO (Maybe a)
 tryWaitChild (ThreadHandle (_,mvar)) = tryTakeMVar mvar
+
+tryWaitSomeChild  :: SomeThreadHandle e -> IO (Maybe (Maybe e))
+tryWaitSomeChild (SomeTH th) = do
+  r <- tryWaitChild th
+  return $ case r of
+    Nothing        -> Nothing
+    Just (Right _) -> Just Nothing
+    Just (Left e)  -> Just (Just e)
 
 data SomeThreadHandle e = forall a. SomeTH (ThreadHandle (Either e a))
 

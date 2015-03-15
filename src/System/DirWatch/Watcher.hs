@@ -14,14 +14,23 @@ import Control.Monad.Reader (MonadReader, asks, ReaderT, runReaderT)
 import Control.Monad.State.Strict (
     MonadState (get,put)
   , StateT
-  , modify
   , runStateT
   )
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Data.Default (def)
+import Data.Monoid (Monoid(..))
 import qualified Data.ByteString.Lazy as LBS
-import Data.HashMap.Strict (HashMap, insertWith, empty)
+import Data.HashMap.Strict as HM (
+    HashMap
+  , insertWith
+  , unionWith
+  , empty
+  , toList
+  , fromList
+  )
+import Data.Maybe (catMaybes)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import System.INotify (
     INotify
   , Event (..)
@@ -37,15 +46,16 @@ import System.DirWatch.Config (
   , RunnableWatcher
   , Config(..)
   , Watcher(..)
+  , getCompiled
   )
-import System.DirWatch.Util (enumerate, patternDir)
+import System.DirWatch.Util (patternDir)
 
 import System.DirWatch.Threading (
-    ThreadHandle
-  , SomeThreadHandle
+    SomeThreadHandle
   , toSomeThreadHandle
   , forkChild
   , waitChild
+  , tryWaitSomeChild
   , killChild
   )
 import System.DirWatch.Logging (
@@ -58,16 +68,21 @@ import System.DirWatch.Logging (
   , fromStrings
   )
 import System.DirWatch.Processor (
-    ProcessorM
-  , ProcessorConfig (..)
+    ProcessorConfig (..)
   , ProcessorError
   , runProcessorM
   , withFile
   )
-import qualified System.DirWatch.Processor as P
 
 type StopCond = MVar ()
-type ThreadMap = HashMap FilePath [SomeThreadHandle ProcessorError]
+type ThreadMap = HashMap FilePath [FileProcessor]
+
+data FileProcessor
+  = FileProcessor {
+      fpHandle  :: SomeThreadHandle ProcessorError
+    , fpWatcher :: RunnableWatcher
+    , fpStart   :: POSIXTime
+  }
 
 watchedEvents :: [EventVariety]
 watchedEvents = [MoveIn, CloseWrite]
@@ -85,31 +100,51 @@ data WatcherEnv
     , wInotify  :: INotify
   }
 
+data FailedWatcher
+  = FailedWatcher {
+      fwWatcher     :: RunnableWatcher
+    , fwFilename    :: FilePath
+    , fwFailures    :: [(POSIXTime,ProcessorError)]
+    }
+
+data WatcherState
+  = WatcherState {
+      wThreads :: ThreadMap
+    , wFailed  :: [FailedWatcher]
+  }
+instance Monoid WatcherState where
+  mempty  = WatcherState empty mempty
+  mappend a b
+   = WatcherState {
+       wThreads = unionWith (++) (wThreads a) (wThreads b)
+     , wFailed  = mappend (wFailed a) (wFailed b)
+   }
+
 newtype WatcherM a
   = WatcherM {
-      unWatcherM :: LoggingT (ReaderT WatcherEnv (StateT ThreadMap IO)) a
+      unWatcherM :: LoggingT (ReaderT WatcherEnv (StateT WatcherState IO)) a
       }
   deriving ( Functor, Applicative, Monad, MonadLogger, MonadReader WatcherEnv
-           , MonadState ThreadMap, MonadIO)
+           , MonadState WatcherState, MonadIO)
 
         
-runWatcherEnv :: WatcherEnv -> ThreadMap -> WatcherM a -> IO (a, ThreadMap)
-runWatcherEnv env tmap
-  = flip runStateT tmap
+runWatcherEnv
+  :: WatcherEnv -> WatcherState -> WatcherM a -> IO (a, WatcherState)
+runWatcherEnv env state
+  = flip runStateT state
   . flip runReaderT env
   . runStderrLoggingT
   . unWatcherM
 
-runWatcherM :: RunnableConfig -> StopCond -> WatcherM a -> IO a
+runWatcherM :: RunnableConfig -> StopCond -> WatcherM a -> IO (a,WatcherState)
 runWatcherM cfg stopCond loopFunc = withINotify $ \ino -> do
   env <- WatcherEnv <$> pure cfg <*> pure stopCond <*> newChan <*> pure ino
-  loopth <- forkChild $ runWatcherEnv env empty loopFunc
+  loopth <- forkChild $ runWatcherEnv env mempty loopFunc
   wakerth  <- forkChild  (waker (wChan env))
   takeMVar stopCond
   writeChan (wChan env) Finish
-  (ret, tmap) <- waitChild loopth
+  ret <- waitChild loopth
   killChild wakerth
-  -- TODO clean tmap
   return ret
 
 setupWatches :: WatcherM ()
@@ -134,10 +169,10 @@ setupWatches = do
 
 loop :: WatcherM ()
 loop = do
-  cleanupProcessors
+  handleFinishedFiles
   msg <- getMessage
   case msg of
-    Work wch file -> forkProcessor file (runWatcherOnFile wch file) >> loop
+    Work wch file -> runWatcherOnFile wch file >> loop
     WakeUp        -> loop
     Finish        -> return ()
 
@@ -157,34 +192,54 @@ waker chan = do
   writeChan chan WakeUp
   waker chan
 
-cleanupProcessors :: WatcherM ()
-cleanupProcessors = return ()
-                           
-              
-runWatcherOnFile :: RunnableWatcher -> FilePath -> ProcessorM ()
-runWatcherOnFile Watcher{..} filename = do
-  $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
-  withFile filename ReadMode $ \file -> do
-    content <- liftIO $ LBS.hGetContents file
-    let pairs = case wPreProcessor of
-          Nothing -> [(filename, content)]
-          Just pp ->  pp filename content
-    handles <- forM wProcessors $ \processor -> P.forkChild $
-      mapM_ (uncurry processor) pairs
-    forM_ (enumerate 1 handles) $ \(ix,th) -> do
-      eResult <- P.waitChild th
-      case eResult of
-        Left err -> do
-          $(logError) $ fromStrings [
-            "Processor #", show ix, " from ", wName, " failed: ", show err]
-          return ()
-        Right _ -> return ()
+handleFinishedFiles :: WatcherM ()
+handleFinishedFiles = do
+  state@WatcherState{wThreads=ts} <- get
+  let running = HM.toList ts
+  remaining <- fmap catMaybes $ forM running $ \(fname, runningPs) -> do
+    remainingPs <- fmap catMaybes $ forM runningPs $ \fp -> do
+      result <- liftIO (tryWaitSomeChild (fpHandle fp))
+      case result of
+        Nothing      -> return Nothing
+        Just Nothing -> return (Just fp)
+        Just (Just err) ->
+          registerFailure fname (fpWatcher fp) err >> return Nothing
+    if null remainingPs
+      then archiveFile fname >> return Nothing
+      else return (Just (fname, remainingPs))
+  put state {wThreads=HM.fromList remaining}
 
-forkProcessor :: FilePath -> ProcessorM () -> WatcherM ()
-forkProcessor filename act = do
+archiveFile :: FilePath -> WatcherM ()
+archiveFile _ = return () -- TODO
+
+registerFailure :: FilePath -> RunnableWatcher -> ProcessorError -> WatcherM ()
+registerFailure fname wch err = do
+  $(logError) $ fromStrings ["action on ", fname, " failed: ", show err]
+  return () -- TODO
+
+              
+runWatcherOnFile :: RunnableWatcher -> FilePath -> WatcherM ()
+runWatcherOnFile wch@Watcher{..} filename = do
   cfg <- processorConfig
-  p <- liftIO . forkChild $ (runProcessorM cfg act)
-  modify (addToRunningProcessors filename p)
+  fp <- liftIO $ do
+    th <- forkChild (runProcessorM cfg action)
+    start <- getPOSIXTime
+    return FileProcessor { fpHandle  = toSomeThreadHandle th
+                         , fpStart   = start
+                         , fpWatcher = wch}
+  addToRunningProcessors filename fp
+  where
+    action = do
+      $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
+      withFile filename ReadMode $ \file -> do
+        content <- liftIO $ LBS.hGetContents file
+        let pairs = case wPreProcessor of
+              Nothing -> [(filename, content)]
+              Just pp ->  (getCompiled pp) filename content
+        case wProcessor of
+          Just p  -> (getCompiled p) pairs
+          Nothing -> return ()
+
 
 processorConfig :: WatcherM ProcessorConfig
 processorConfig = do
@@ -194,8 +249,8 @@ processorConfig = do
 
 addToRunningProcessors
   :: FilePath
-  -> ThreadHandle (Either ProcessorError a)
-  -> ThreadMap
-  -> ThreadMap
-addToRunningProcessors path th
-  = insertWith (++) (normalise path) [toSomeThreadHandle th]
+  -> FileProcessor
+  -> WatcherM ()
+addToRunningProcessors path fp = do
+  s@WatcherState{wThreads=ts} <- get
+  put $ s {wThreads = insertWith (++) (normalise path) [fp] ts}

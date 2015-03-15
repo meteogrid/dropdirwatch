@@ -39,6 +39,6 @@ watchers:
     paths:
       - lala
       - lolo
-    processors:
-      - shell:
-          - scp $FILENAME $BAR
+    processor:
+      shell:
+        - scp $FILENAME $BAR

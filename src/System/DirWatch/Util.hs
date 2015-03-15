@@ -1,12 +1,8 @@
-module System.DirWatch.Util (enumerate, patternDir) where
+module System.DirWatch.Util (patternDir) where
 
 import System.FilePath.Posix (joinPath, splitPath)
 import System.FilePath.GlobPattern (GlobPattern)
 
-enumerate :: Int -> [a] -> [(Int,a)]
-enumerate x0 = zip [x0..]
-
-          
 patternDir :: GlobPattern -> FilePath
 patternDir = joinPath . takeWhile notWildcard . splitPath
   where

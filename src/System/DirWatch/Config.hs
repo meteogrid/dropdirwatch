@@ -10,6 +10,8 @@ module System.DirWatch.Config (
   , SerializableWatcher
   , RunnableWatcher
   , RunnableConfig
+  , getCompiled
+  , compileWith
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
@@ -25,24 +27,25 @@ import Data.Aeson (
   , (.!=)
   )
 import Data.Monoid (Monoid(..))
+import qualified Data.Text as T
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.GlobPattern (GlobPattern)
 import System.DirWatch.ShellEnv (ShellEnv)
 import System.DirWatch.Processor (PreProcessor, Processor)
 
-data Config p h
+data Config w
   = Config {
       cfgPluginDirs :: [FilePath]
     , cfgShellEnv   :: ShellEnv
-    , cfgWatchers   :: [Watcher p h]
-  }
+    , cfgWatchers   :: [w]
+  } deriving Show
 
-type SerializableConfig = Config Code ProcessorCode
+type SerializableConfig = Config SerializableWatcher
+type RunnableConfig  = Config RunnableWatcher
 type SerializableWatcher = Watcher Code ProcessorCode
-type RunnableConfig  = Config PreProcessor Processor
-type RunnableWatcher = Watcher PreProcessor Processor
-
+type RunnableWatcher
+  = Watcher (Compiled PreProcessor Code) (Compiled Processor ProcessorCode)
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}
@@ -67,31 +70,55 @@ data Watcher p h
       wName         :: String
     , wPaths        :: [GlobPattern]
     , wPreProcessor :: Maybe p
-    , wProcessors   :: [h]
-  }
+    , wProcessor    :: Maybe h
+  } deriving (Eq, Show)
 
-instance ToJSON SerializableWatcher where
+instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
   toJSON Watcher{..}
     = object [
         "name"         .= wName
       , "paths"        .= wPaths
       , "preprocessor" .= wPreProcessor
-      , "processors"   .= wProcessors
+      , "processor"    .= wProcessor
     ]
 
 instance FromJSON SerializableWatcher where
   parseJSON (Object v)
-      = Watcher <$>
-        v .:   "name" <*>
-        v .:   "paths" <*>
-        v .:?  "preprocessor" <*>
-        v .:?  "processors" .!= []
+    | not (null unexpectedKeys)
+    = fail $ "Unexpected keys for watcher: " ++
+             T.unpack (T.intercalate ", " unexpectedKeys)
+    | otherwise
+    = Watcher <$>
+      v .:   "name" <*>
+      v .:   "paths" <*>
+      v .:?  "preprocessor" <*>
+      v .:?  "processor"
+    where expectedKeys = ["name", "paths", "preprocessor", "processor"]
+          unexpectedKeys = filter (`notElem` expectedKeys) $ HM.keys v
   parseJSON _ = fail "Expected an object"
 
+newtype Compiled a code = Compiled (a, code)
+getCompiled :: Compiled a code -> a
+getCompiled (Compiled a) = fst a
+
+instance Show code => Show (Compiled a code) where
+  show (Compiled (_,a)) = show a
+
+instance Eq code => Eq (Compiled a code) where
+  Compiled (_,a) == Compiled (_,b) = a==b
+
+compileWith :: Functor m => (code -> m a) -> code -> m (Compiled a code)
+compileWith f code = fmap (\a -> Compiled (a,code)) (f code)
+
+instance ToJSON code => ToJSON (Compiled a code) where
+  toJSON (Compiled (_,code)) = toJSON code
+
 data Code
-  = EvalCode   String
-  | ImportCode String String Object
-  deriving (Show)
+  = EvalCode   { codeEval   :: String}
+  | ImportCode { codeModule :: String
+               , codeSymbol :: String
+               , codeParams :: Object}
+  deriving (Show, Eq)
 
 instance ToJSON Code where
   toJSON (EvalCode s)

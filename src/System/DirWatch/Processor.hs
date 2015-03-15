@@ -12,6 +12,7 @@ module System.DirWatch.Processor (
   , ShellCmd (..)
   , shellCmd
   , executeShellCmd
+  , shellProcessor
   , createProcess
   , waitForProcess
   , forkChild
@@ -26,6 +27,7 @@ module System.DirWatch.Processor (
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
+import Control.Monad (forM_)
 import Control.Monad.Trans.Control
 import Control.Exception.Lifted as E (
     Exception
@@ -64,7 +66,7 @@ import qualified System.Process as P (createProcess, waitForProcess)
 import System.IO (Handle)
 
 type PreProcessor = FilePath -> LBS.ByteString -> [(FilePath,LBS.ByteString)]
-type Processor = FilePath -> LBS.ByteString -> ProcessorM ()
+type Processor = [(FilePath, LBS.ByteString)] -> ProcessorM ()
 
 data ProcessorConfig
   = ProcessorConfig {
@@ -181,6 +183,13 @@ executeShellCmd ShellCmd{..} = do
   case exitCode of
     ExitSuccess   -> return (out, err)
     ExitFailure c -> throwE (ShellError c out err)
+
+
+shellProcessor :: [String] -> Processor
+shellProcessor cmds files = forM_ files $ \(filename,content) ->
+    let env  = envSet "FILENAME" filename mempty
+        sh s = executeShellCmd $ (shellCmd s) {shInput=Just content, shEnv=env}
+    in mapM_ sh cmds
 
 withFile :: FilePath -> IOMode -> (Handle -> ProcessorM a) -> ProcessorM a
 withFile fname mode

@@ -1,12 +1,16 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-module System.DirWatch.Interpreter (compileConfig) where
+module System.DirWatch.Interpreter (
+    CompilerConfig (..)
+  , runCompiler
+  , compileWatcher
+  , compileConfig
+) where
 
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
-import Data.Monoid (mempty)
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     InterpreterT
@@ -31,15 +35,9 @@ import System.DirWatch.Config (
   , RunnableWatcher
   , Code (..)
   , ProcessorCode (..)
+  , compileWith
   )
-import System.DirWatch.Processor (
-    Processor
-  , ShellCmd (..)
-  , shellCmd
-  , executeShellCmd
-  )
-import System.DirWatch.ShellEnv (envSet)
-
+import System.DirWatch.Processor (Processor, shellProcessor)
 
 data CompilerConfig
   = CompilerConfig {
@@ -48,34 +46,33 @@ data CompilerConfig
 
 newtype Compiler a
   = Compiler {
-      runCompiler :: InterpreterT (ReaderT CompilerConfig IO) a
+      unCompiler :: InterpreterT (ReaderT CompilerConfig IO) a
   } deriving (Functor, Applicative, Monad)
 
 compileConfig
   :: SerializableConfig -> IO (Either InterpreterError RunnableConfig)
-compileConfig c = flip runReaderT cConfig . runInterpreter . runCompiler $ do
+compileConfig c = runCompiler cConfig $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
   where cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
 
+runCompiler :: CompilerConfig -> Compiler a -> IO (Either InterpreterError a)
+runCompiler c = flip runReaderT c . runInterpreter . unCompiler
+
+
 compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
 compileWatcher w = do
-  mP <- case wPreProcessor w of
+  mPp <- case wPreProcessor w of
           Nothing -> return Nothing
-          Just p  -> fmap Just $ compileCode p
-  hs <- mapM compileProcessor (wProcessors w)
-  return $ w {wPreProcessor=mP, wProcessors=hs}
+          Just p  -> fmap Just $ compileWith compileCode p
+  mP <- case wProcessor w of
+          Nothing -> return Nothing
+          Just p  -> fmap Just $ compileWith compileProcessor p
+  return $ w {wPreProcessor=mPp, wProcessor=mP}
 
 compileProcessor :: ProcessorCode -> Compiler Processor
 compileProcessor (ProcessorCode code)  = compileCode code
-compileProcessor (ProcessorShell cmds) = return (executeShellCommands cmds)
-
-
-executeShellCommands :: [String] -> Processor
-executeShellCommands cmds filename content = do
-  let env  = envSet "FILENAME" filename mempty
-      sh s = executeShellCmd $ (shellCmd s) {shInput=Just content, shEnv=env}
-  mapM_ sh cmds
+compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
