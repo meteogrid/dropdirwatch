@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -11,8 +13,10 @@ import Control.Concurrent.MVar (
   , takeMVar
   )
 import Control.Monad (forM_, forM, void)
+import Control.Monad.Base (MonadBase)
+import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import Control.Monad.Reader (MonadReader, asks, ReaderT, runReaderT)
+import Control.Monad.Reader (MonadReader(ask), asks, ReaderT, runReaderT)
 import Control.Monad.State.Strict (
     MonadState (get,put)
   , StateT
@@ -129,8 +133,15 @@ newtype WatcherM a
       unWatcherM :: LoggingT (ReaderT WatcherEnv (StateT WatcherState IO)) a
       }
   deriving ( Functor, Applicative, Monad, MonadLogger, MonadReader WatcherEnv
-           , MonadState WatcherState, MonadIO)
+           , MonadState WatcherState, MonadIO, MonadBase IO)
 
+instance MonadBaseControl IO WatcherM where
+   type StM WatcherM a = (a, WatcherState)
+   liftBaseWith f = do
+     env <- ask
+     state <- get
+     liftIO $ f (runWatcherEnv env state)
+   restoreM (a, state) = put state >> return a
         
 runWatcherEnv
   :: WatcherEnv -> WatcherState -> WatcherM a -> IO (a, WatcherState)
@@ -237,6 +248,7 @@ archiveFile fname = do
 registerFailure :: FilePath -> RunnableWatcher -> ProcessorError -> WatcherM ()
 registerFailure fname wch err = do
   $(logError) $ fromStrings ["action on ", fname, " failed: ", show err]
+
   return () -- TODO
 
               

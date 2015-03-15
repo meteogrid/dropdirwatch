@@ -28,7 +28,7 @@ module System.DirWatch.Processor (
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Monad (forM_)
-import Control.Monad.Trans.Control
+import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Exception.Lifted as E (
     Exception
   , SomeException
