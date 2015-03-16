@@ -24,7 +24,6 @@ module System.DirWatch.Processor (
   , runProcessorM
   , throwE
   , catchE
-  , withFile
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
@@ -36,7 +35,6 @@ import Control.Exception.Lifted as E (
   , handle
   , catch
   , finally
-  , bracket
   )
 import Control.Monad.Reader (MonadReader(..), asks, ReaderT, runReaderT)
 import Control.Monad.Base (MonadBase)
@@ -57,7 +55,6 @@ import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
 import qualified System.DirWatch.Threading as Th
 import System.Exit (ExitCode(..))
-import System.IO (IOMode, hClose, openFile)
 import System.Process (
     CreateProcess(..)
   , ProcessHandle
@@ -164,7 +161,7 @@ createProcess cp = do
 waitForProcess :: ProcessHandle -> ProcessorM ExitCode
 waitForProcess = liftIO . P.waitForProcess
   
-executeShellCmd :: ShellCmd -> ProcessorM (BS.ByteString, BS.ByteString)
+executeShellCmd :: ShellCmd -> ProcessorM (ByteString, ByteString)
 executeShellCmd ShellCmd{..} = do
   env <- fmap (shellEnvToEnv . (`mappend` shEnv)) (asks pShellEnv)
   let process = (shell shCmd)
@@ -201,10 +198,6 @@ shellProcessor cmds files = forM_ files $ \(filename,content) ->
         sh s = executeShellCmd $ (shellCmd s) {shInput=Just content, shEnv=env}
     in mapM_ sh cmds
 
-withFile :: FilePath -> IOMode -> (Handle -> ProcessorM a) -> ProcessorM a
-withFile fname mode
-  = bracket (liftIO (openFile fname mode)) (liftIO . hClose)
-
 forkChild :: ProcessorM a -> ProcessorM (ThreadHandle (Either ProcessorError a))
 forkChild act = do
   env <- ProcessorM ask
@@ -226,8 +219,8 @@ data ProcessorError
   = ProcessorException SomeException
   | ShellError {
       seCode   :: Int
-    , seStdout :: BS.ByteString
-    , seStdErr :: BS.ByteString
+    , seStdout :: ByteString
+    , seStdErr :: ByteString
     }
   | InternalError String
   deriving (Show, Typeable)

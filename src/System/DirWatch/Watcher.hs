@@ -82,7 +82,6 @@ import System.DirWatch.Processor (
     ProcessorConfig (..)
   , ProcessorError
   , runProcessorM
-  , withFile
   )
 
 type StopCond = MVar ()

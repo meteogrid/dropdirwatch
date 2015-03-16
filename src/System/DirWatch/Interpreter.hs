@@ -103,6 +103,8 @@ pluginImports = [
   , ("System.DirWatch.PluginAPI", Nothing)
   , ("Data.HashMap.Strict", Nothing)
   , ("Data.Text", Nothing)
-  , ("Data.ByteString.Lazy", Nothing)
+  , ("Data.ByteString", Nothing)
+  , ("Control.Monad.Trans.Resource", Nothing)
+  , ("Data.Conduit", Nothing)
   , ("Prelude", Nothing)
   ]
