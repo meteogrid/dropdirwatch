@@ -22,13 +22,13 @@ spec = do
   describe "archiveDestination" $ do
     let day = fromGregorian 2015 3 15
 
-    it "subdirecotry is relative if archive dir and filename share prefix" $
+    it "subdirectory is relative if archive dir and filename share prefix" $
       archiveDestination "/srv/ftp/archive" day
           "/srv/ftp/dropbox/luther/foo.txt"
         `shouldBe`
           "/srv/ftp/archive/dropbox/luther/2015/3/15/foo.txt"
 
-    it "subdirecotry is absolute if archive dir and filename dont share prefix"$
+    it "subdirectory is absolute if archive dir and filename dont share prefix"$
       archiveDestination "/archive" day
           "/srv/ftp/dropbox/luther/foo.txt"
         `shouldBe`

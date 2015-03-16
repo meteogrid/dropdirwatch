@@ -28,6 +28,7 @@ import Control.Monad.State.Strict (
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
+import Data.Fixed (Fixed, E2)
 import qualified Data.ByteString.Lazy as LBS
 import Data.HashMap.Strict as HM (
     HashMap
@@ -39,7 +40,7 @@ import Data.HashMap.Strict as HM (
   )
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
-import Data.Time.Clock (getCurrentTime, utctDay)
+import Data.Time.Clock (getCurrentTime, utctDay, utctDayTime)
 import System.INotify (
     INotify
   , Event (..)
@@ -47,7 +48,7 @@ import System.INotify (
   , withINotify
   , addWatch
   )
-import System.Directory (createDirectoryIfMissing, renameFile)
+import System.Directory (createDirectoryIfMissing, renameFile, doesFileExist)
 import System.FilePath.GlobPattern ((~~))
 import System.FilePath.Posix (joinPath, takeDirectory, normalise)
 import System.IO (IOMode(ReadMode))
@@ -247,9 +248,14 @@ archiveFile fname = do
       time <- liftIO getCurrentTime
       let dest    = archiveDestination archiveDir (utctDay time) fname
           destDir = takeDirectory dest
-      $(logInfo) $ fromStrings ["Archiving ", fname, " -> ", dest]
+      exists <- liftIO $ doesFileExist dest
+      let finalDest
+            | exists    = dest ++ "." ++ show secs
+            | otherwise = dest
+          secs = realToFrac (utctDayTime time) :: Fixed E2
+      $(logInfo) $ fromStrings ["Archiving ", fname, " -> ", finalDest]
       result <- liftIO . tryIOError $
-        createDirectoryIfMissing True destDir >> renameFile fname dest
+        createDirectoryIfMissing True destDir >> renameFile fname finalDest
       case result of
         Left e -> do
           $(logError) $ fromStrings ["Could not archive ", fname, ": ", show e]
