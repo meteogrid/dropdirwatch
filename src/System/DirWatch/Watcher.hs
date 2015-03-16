@@ -15,7 +15,7 @@ module System.DirWatch.Watcher (
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Exception (try, finally)
-import Control.Monad (forM_, forM, void)
+import Control.Monad (forM_, forM)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.IO.Class (MonadIO(liftIO))
