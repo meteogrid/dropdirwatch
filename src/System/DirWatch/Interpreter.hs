@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.DirWatch.Interpreter (
@@ -11,21 +12,13 @@ module System.DirWatch.Interpreter (
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
+import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
+import Control.Monad.IO.Class(liftIO)
 import Data.Typeable (Typeable)
-import Language.Haskell.Interpreter (
-    InterpreterT
-  , InterpreterError
-  , ModuleName
-  , runInterpreter
-  , interpret
-  , as
-  , setImportsQ
-  , loadModules
-  , setTopLevelModules
-  , set
-  , searchPath
-  , OptionVal ((:=))
-  )
+import Data.Aeson (Object)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as BS
+import Data.Monoid
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
@@ -38,6 +31,7 @@ import System.DirWatch.Config (
   , compileWith
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
+import System.DirWatch.Compiler
 
 data CompilerConfig
   = CompilerConfig {
@@ -46,18 +40,18 @@ data CompilerConfig
 
 newtype Compiler a
   = Compiler {
-      unCompiler :: InterpreterT (ReaderT CompilerConfig IO) a
+      unCompiler :: ExceptT ByteString (ReaderT CompilerConfig IO) a
   } deriving (Functor, Applicative, Monad)
 
 compileConfig
-  :: SerializableConfig -> IO (Either InterpreterError RunnableConfig)
+  :: SerializableConfig -> IO (Either ByteString RunnableConfig)
 compileConfig c = runCompiler cConfig $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
   where cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
 
-runCompiler :: CompilerConfig -> Compiler a -> IO (Either InterpreterError a)
-runCompiler c = flip runReaderT c . runInterpreter . unCompiler
+runCompiler :: CompilerConfig -> Compiler a -> IO (Either ByteString a)
+runCompiler c = flip runReaderT c . runExceptT . unCompiler
 
 
 compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
@@ -77,26 +71,31 @@ compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
   sp <- lift $ asks ccSearchPath
-  set [searchPath := sp]
-  case spec of
-    EvalCode s -> do
-      setImportsQ pluginImports
-      interpret ('\\':s) as
+  let env = defaultEnv { envImports=map fst pluginImports
+                       , importPaths=sp
+                       }
+  eRet <- liftIO $ case spec of
+    EvalCode s ->
+      interpret env ("let sym = \\"<>s<>" in sym")
     ImportCode m s c -> do
-      loadModules [m]
-      setTopLevelModules [m]
-      setImportsQ pluginImports
-      let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
-                       , "          Right v -> Right (", s, " v);          "
-                       , "          Left e  -> Left e;                     "
-                       , "          }                                      "
-                       ]
-      eO <- interpret cmd as
-      case eO c of 
-        Right o -> return o
-        Left e -> fail $ concat ["Error when compiling ", m, ":", s, ": ", e]
+      let env' = env {envTargets=[m]}
+          cmd = concat [
+                  "let sym = \\c -> case parseEither parseJSON (Object c) of {"
+                , "          Right v -> Right (", s, " v);"
+                , "          Left e  -> Left e;"
+                , "          }"
+                , "in sym"
+                ]
+      eOut <- interpret env' cmd
+      return $ case eOut of
+        Right eO ->
+          case eO c of 
+            Right o -> Right o
+            Left e -> Left $ "Error when parsing plugin config: " <> BS.pack e
+        Left e -> Left e
+  either throwE return eRet
     
-pluginImports :: [(ModuleName, Maybe String)]
+pluginImports :: [(String, Maybe String)]
 pluginImports = [
     ("Data.Aeson", Nothing)
   , ("Data.Aeson.Types", Nothing)
