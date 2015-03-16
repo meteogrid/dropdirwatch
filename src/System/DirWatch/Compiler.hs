@@ -7,7 +7,7 @@ module System.DirWatch.Compiler (
 ) where
 
 import Data.ByteString.Builder (Builder, toLazyByteString , byteString)
-import Control.Exception (Handler(Handler), catches)
+import Control.Exception (IOException, Handler(Handler), catches)
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS
@@ -80,6 +80,7 @@ interpret env code = do
   (runGhc (Just (envLibdir env)) compileAndLoad) `catches` [
         Handler (\(e :: SourceError) -> handleEx (show e))
       , Handler (\(e :: GhcApiError) -> handleEx (show e))
+      , Handler (\(e :: IOException) -> handleEx (show e))
     ]
 
 importModules:: [String] -> Ghc ()

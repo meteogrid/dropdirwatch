@@ -295,7 +295,7 @@ runWatcherOnFile wch@Watcher{..} filename = do
                             Just c  -> sourceFile filename $= c
                             Nothing -> sourceFile filename
             return (fname, content)
-          (getCompiled p) pairs'
+          mapM_ (uncurry $ getCompiled p) pairs'
         Nothing -> return ()
 
 

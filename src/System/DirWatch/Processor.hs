@@ -27,7 +27,6 @@ module System.DirWatch.Processor (
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
-import Control.Monad (forM_)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Exception.Lifted as E (
     Exception
@@ -69,7 +68,7 @@ import System.IO (Handle)
 type PreProcessor
   = FilePath
  -> [(FilePath, Maybe (Conduit ByteString (ResourceT IO) ByteString))]
-type Processor = [(FilePath, Source (ResourceT IO) ByteString)] -> ProcessorM ()
+type Processor = FilePath -> Source (ResourceT IO) ByteString -> ProcessorM ()
 
 data ProcessorConfig
   = ProcessorConfig {
@@ -193,8 +192,8 @@ executeShellCmd ShellCmd{..} = do
 
 
 shellProcessor :: [String] -> Processor
-shellProcessor cmds files = forM_ files $ \(filename,content) ->
-    let env  = envSet "FILENAME" filename mempty
+shellProcessor cmds filename content
+  = let env  = envSet "FILENAME" filename mempty
         sh s = executeShellCmd $ (shellCmd s) {shInput=Just content, shEnv=env}
     in mapM_ sh cmds
 
