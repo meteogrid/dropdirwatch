@@ -26,10 +26,11 @@ import Control.Monad.State.Strict (
   , runStateT
   )
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
+import Data.Conduit (($=))
+import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
 import Data.Fixed (Fixed, E2)
-import qualified Data.ByteString.Lazy as LBS
 import Data.HashMap.Strict as HM (
     HashMap
   , insertWith
@@ -51,7 +52,6 @@ import System.INotify (
 import System.Directory (createDirectoryIfMissing, renameFile, doesFileExist)
 import System.FilePath.GlobPattern ((~~))
 import System.FilePath.Posix (joinPath, takeDirectory, normalise)
-import System.IO (IOMode(ReadMode))
 import System.IO.Error (tryIOError)
 import System.DirWatch.Config (
     RunnableConfig
@@ -268,8 +268,7 @@ handleRetries = return () -- TODO
 
 registerFailure :: FilePath -> RunnableWatcher -> ProcessorError -> WatcherM ()
 registerFailure fname wch err = do
-  $(logError) $ fromStrings ["action on ", fname, " failed: ", show err]
-
+  $(logError) $ fromStrings [wName wch, " failed on ", fname, ": ", show err]
   return () -- TODO
 
               
@@ -287,14 +286,18 @@ runWatcherOnFile wch@Watcher{..} filename = do
   where
     action = do
       $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
-      withFile filename ReadMode $ \file -> do
-        content <- liftIO $ LBS.hGetContents file
-        let pairs = case wPreProcessor of
-              Nothing -> [(filename, content)]
-              Just pp ->  (getCompiled pp) filename content
-        case wProcessor of
-          Just p  -> (getCompiled p) pairs
-          Nothing -> return ()
+      case wProcessor of
+        Just p  -> do
+          let pairs = case wPreProcessor of
+                Nothing -> [(filename, Nothing)]
+                Just pp ->  (getCompiled pp) filename
+          pairs' <- forM pairs $ \(fname, mConduit) -> do
+            let content = case mConduit of
+                            Just c  -> sourceFile filename $= c
+                            Nothing -> sourceFile filename
+            return (fname, content)
+          (getCompiled p) pairs'
+        Nothing -> return ()
 
 
 processorConfig :: WatcherM ProcessorConfig
