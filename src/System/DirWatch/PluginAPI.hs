@@ -1,3 +1,4 @@
+{-# LANGUAGE Trustworthy #-}
 module System.DirWatch.PluginAPI (
     modifyBaseName
   , module API

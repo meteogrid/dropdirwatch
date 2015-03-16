@@ -15,7 +15,6 @@ import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Control.Monad.IO.Class(liftIO)
 import Data.Typeable (Typeable)
-import Data.Aeson (Object)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS
 import Data.Monoid
@@ -72,7 +71,7 @@ compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
   sp <- lift $ asks ccSearchPath
   let env = defaultEnv { envImports=map fst pluginImports
-                       , importPaths=sp
+                       , envSearchPath=sp
                        }
   eRet <- liftIO $ case spec of
     EvalCode s ->

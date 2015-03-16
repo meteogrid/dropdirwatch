@@ -72,7 +72,6 @@ library
                      , resourcet
                      , ghc
                      , ghc-paths
-                     , temporary
 
   default-language:    Haskell2010
   hs-source-dirs:
@@ -86,7 +85,7 @@ test-suite spec
   type:
       exitcode-stdio-1.0
   ghc-options:
-      -Wall
+      -Wall -dynamic
   hs-source-dirs:
       test src
   main-is:
@@ -124,12 +123,11 @@ test-suite spec
     , resourcet
     , ghc
     , ghc-paths
-    , temporary
   default-language:    Haskell2010
 
 executable dropdirwatch
   ghc-options:
-      -Wall -threaded -rtsopts
+      -Wall -threaded -dynamic -rtsopts
   hs-source-dirs:
       exe
   main-is:
