@@ -252,14 +252,13 @@ archiveFile fname = do
             | exists    = dest ++ "." ++ show secs
             | otherwise = dest
           secs = realToFrac (utctDayTime time) :: Fixed E2
-      $(logInfo) $ fromStrings ["Archiving ", fname, " -> ", finalDest]
       result <- liftIO . tryIOError $
         createDirectoryIfMissing True destDir >> renameFile fname finalDest
       case result of
         Left e -> do
           $(logError) $ fromStrings ["Could not archive ", fname, ": ", show e]
           return ()
-        Right () -> return ()
+        Right () -> $(logInfo) $ fromStrings ["Archived ", fname, " -> ", finalDest]
     Nothing -> return ()
 
 handleRetries :: WatcherM ()
@@ -296,7 +295,8 @@ runWatcherOnFile wch@Watcher{..} filename = do
                             Nothing -> sourceFile filename
             return (fname, content)
           mapM_ (uncurry $ getCompiled p) pairs'
-        Nothing -> return ()
+          $(logInfo) $ fromStrings ["Finished ", wName, " on ", filename]
+        Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 
 
 processorConfig :: WatcherM ProcessorConfig

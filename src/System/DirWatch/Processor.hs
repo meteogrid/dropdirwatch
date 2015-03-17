@@ -1,4 +1,7 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -8,6 +11,8 @@ module System.DirWatch.Processor (
     Processor
   , PreProcessor
   , ProcessorM
+  , ProcessorConduit
+  , ProcessorSource
   , ProcessorConfig (..)
   , ProcessorError (..)
   , ShellCmd (..)
@@ -27,19 +32,25 @@ module System.DirWatch.Processor (
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
-import Control.Monad.Trans.Control (MonadBaseControl(..))
+import Control.Concurrent (threadDelay, forkIO)
 import Control.Exception.Lifted as E (
     Exception
   , SomeException
+  , IOException
   , handle
   , catch
-  , finally
   )
+import Control.Monad (void)
 import Control.Monad.Reader (MonadReader(..), asks, ReaderT, runReaderT)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Catch (MonadThrow)
+import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
-import Control.Monad.Trans.Resource (MonadResource, ResourceT, runResourceT)
+import Control.Monad.Trans.Resource (
+    MonadResource
+  , ResourceT
+  , runResourceT
+  )
 import qualified Control.Monad.Trans.Except as E
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Conduit (Conduit, ConduitM, Source, ($$))
@@ -50,7 +61,12 @@ import Data.Default (Default(def))
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Monoid (mempty, mappend)
 import Data.Typeable (Typeable)
-import System.DirWatch.Logging (MonadLogger, LoggingT, runStderrLoggingT)
+import System.DirWatch.Logging (
+    MonadLogger
+  , LoggingT
+  , runStderrLoggingT
+  , logDebug
+  )
 import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
 import qualified System.DirWatch.Threading as Th
@@ -61,15 +77,19 @@ import System.Process (
   , StdStream(..)
   , shell
   , interruptProcessGroupOf
+  , terminateProcess
   , getProcessExitCode
   )
 import qualified System.Process as P (createProcess, waitForProcess)
 import System.IO (Handle)
 
+type ProcessorConduit i o = Conduit i ProcessorM o
+type ProcessorSource o = Source ProcessorM o
+
 type PreProcessor
   = FilePath
- -> [(FilePath, Maybe (Conduit ByteString ProcessorM ByteString))]
-type Processor = FilePath -> Source ProcessorM ByteString -> ProcessorM ()
+ -> [(FilePath, Maybe (ProcessorConduit ByteString ByteString))]
+type Processor = FilePath -> ProcessorSource ByteString -> ProcessorM ()
 
 data ProcessorConfig
   = ProcessorConfig {
@@ -126,15 +146,21 @@ instance MonadBaseControl IO ProcessorM where
 runProcessorM :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
 runProcessorM cfg act = do
   env <- ProcessorEnv <$> pure cfg <*> newIORef [] <*> newIORef []
-  finally (runProcessorEnv env act) (cleanup env)
+  ret <- runProcessorEnv env act
+  cleanup env `catch` (\(_::IOException) -> return ())
+  return ret
   where
     cleanup env = do
+      runStderrLoggingT $ $(logDebug) "Cleanup env"
       readIORef (pProcs env) >>= mapM_ killProc
       readIORef (pThreads env) >>= mapM_ (catchKillErr . Th.killSomeChild)
     killProc p = catchKillErr $ do
       mExitCode <- getProcessExitCode p
       case mExitCode of
-        Nothing -> interruptProcessGroupOf p
+        Nothing -> void $ forkIO $ do
+                      terminateProcess p
+                      threadDelay $ 10*1000000 -- give it 10 seconds to die
+                      interruptProcessGroupOf p
         _       -> return ()
     catchKillErr = flip catch handleKillErr
     handleKillErr :: SomeException -> IO ()
@@ -144,7 +170,7 @@ runProcessorM cfg act = do
 data ShellCmd
   = ShellCmd {
       shCmd   :: String
-    , shInput :: Maybe (Source ProcessorM ByteString)
+    , shInput :: Maybe (ProcessorSource ByteString)
     , shEnv   :: ShellEnv
   }
 
@@ -167,10 +193,11 @@ executeShellCmd :: ShellCmd -> ProcessorM (ByteString, ByteString)
 executeShellCmd ShellCmd{..} = do
   env <- fmap (shellEnvToEnv . (`mappend` shEnv)) (asks pShellEnv)
   let process = (shell shCmd)
-        { std_in  = maybe Inherit (const CreatePipe) shInput
-        , std_out = CreatePipe
-        , std_err = CreatePipe
-        , env     = Just env
+        { std_in       = maybe Inherit (const CreatePipe) shInput
+        , std_out      = CreatePipe
+        , std_err      = CreatePipe
+        , env          = Just env
+        , create_group = True
         }
   (exitCode, out, err) <- do
     p <- createProcess process
