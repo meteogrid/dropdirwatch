@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 module Main (main) where
 
 import Control.Monad (when, void)
@@ -48,7 +49,9 @@ main = do
             removeWatches = readIORef oldWatches >>= mapM_ removeWatch
             signalReload = endLoop stopCond >> watchConfig ino
         removeWatches
+#if !(DYNAMIC_LINKING && COMPILE_PLUGINS)
         takeMVar pluginDirs >>= mapM watchDir >>= writeIORef oldWatches
+#endif
         whenM (readIORef doWatchConfig) $ do
           writeIORef doWatchConfig False
           void $ addWatch ino [MoveIn,Modify,OneShot] configFile $

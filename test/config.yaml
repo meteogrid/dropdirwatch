@@ -15,7 +15,7 @@ watchers:
       - lala
       - lolo
     preprocessor:
-      import: Plugin:addPrefix
+      plugin: Plugin:addPrefix
       prefix: foo
   - name: evalMultiLine
     paths:

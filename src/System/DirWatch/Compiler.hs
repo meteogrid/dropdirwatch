@@ -1,5 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE CPP #-}
 module System.DirWatch.Compiler (
     EvalEnv (..)
   , interpret
@@ -52,8 +53,17 @@ interpret env code = withSystemTempDirectory ".dropdirwatch_objs" $ \dir -> do
   logRef <- newIORef mempty :: (IO (IORef Builder))
   let compileAndLoad = do
         dflags <- getSessionDynFlags
-        let dflags' = dynamicTooMkDynamicDynFlags
+        let dflags' =
+#if DYNAMIC_LINKING
+                      dynamicTooMkDynamicDynFlags
+#else
+                      id
+#endif
+#if COMPILE_PLUGINS
                     . updOptLevel 2
+#else
+                    . id
+#endif
                     . setTmpDir dir
                     $ dflags {
                         mainFunIs     = Nothing
@@ -62,7 +72,11 @@ interpret env code = withSystemTempDirectory ".dropdirwatch_objs" $ \dir -> do
                       , outputFile    = Nothing
                       , ghcLink       = LinkInMemory
                       , ghcMode       = CompManager
+#if COMPILE_PLUGINS
                       , hscTarget     = HscAsm
+#else
+                      , hscTarget     = HscInterpreted
+#endif
                       , objectDir     = Just dir
                       , hiDir         = Just dir
                       , importPaths   = envSearchPath env

@@ -130,7 +130,7 @@ instance ToJSON Code where
   toJSON (ImportCode m s c)
     = Object (HM.union os c)
     where
-      os = case object ["import" .= concat [m, ":", s]] of
+      os = case object ["plugin" .= concat [m, ":", s]] of
             Object os' -> os'
             _          -> error "should never happen"
 
@@ -140,10 +140,10 @@ instance FromJSON Code where
             if HM.size v == 1
               then return $ EvalCode c
               else fail "\"eval\" expects no arguments")
-    <|> (do i <- v .: "import"
+    <|> (do i <- v .: "plugin"
             case L.splitOn ":" i of
-             [m,s] -> return (ImportCode m s (HM.delete "import" v))
-             _     -> fail "\"import\" should be <module>:<symbol>")
+             [m,s] -> return (ImportCode m s (HM.delete "plugin" v))
+             _     -> fail "\"plugin\" should be <module>:<symbol>")
   parseJSON _ = fail "Expected an object"
 
 data ProcessorCode

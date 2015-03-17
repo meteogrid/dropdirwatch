@@ -24,6 +24,21 @@ build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
 
+Flag CompilePlugins
+  Description: Enable compiled plugins.
+               WARNING: If DynamicLinking is also enabled plugins won't be
+               properly reloaded when they're modfied. This is probably related
+               to https://ghc.haskell.org/trac/ghc/ticket/8238
+  Default:     False
+
+Flag DynamicLinking
+  Description: Enable DynamicLinking of executables. Will also need to have all
+               dependencies compiled as with "-shared"
+               WARNING: If DynamicLinking is also enabled plugins won't be
+               properly reloaded when they're modfied. This is probably related
+               to https://ghc.haskell.org/trac/ghc/ticket/8238
+  Default:     False
+
 source-repository head
   type:              git
   location:          https://github.com/meteogrid/dropdirwatch
@@ -83,13 +98,18 @@ library
       -Wall
       -fwarn-incomplete-patterns
       -fwarn-incomplete-uni-patterns
+  if flag(CompilePlugins)
+    CPP-Options: -DCOMPILE_PLUGINS
+  if flag(DynamicLinking)
+    CPP-Options: -DDYNAMIC_LINKING
 
 test-suite spec
   type:
       exitcode-stdio-1.0
   ghc-options:
       -Wall
-      -dynamic
+  if flag(DynamicLinking)
+    ghc-options: -dynamic
   hs-source-dirs:
       test src
   main-is:
@@ -133,7 +153,9 @@ test-suite spec
 
 executable dropdirwatch
   ghc-options:
-      -Wall -threaded -dynamic -rtsopts
+      -Wall -threaded -rtsopts
+  if flag(DynamicLinking)
+    ghc-options: -dynamic
   hs-source-dirs:
       exe
   main-is:
@@ -145,3 +167,7 @@ executable dropdirwatch
     , hinotify
     , text
   default-language:    Haskell2010
+  if flag(CompilePlugins)
+    CPP-Options: -DCOMPILE_PLUGINS
+  if flag(DynamicLinking)
+    CPP-Options: -DDYNAMIC_LINKING
