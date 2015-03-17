@@ -8,7 +8,7 @@ import Data.Monoid ((<>))
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Data.Text (Text)
+import Data.Text as T (Text, unlines)
 import System.DirWatch
 import System.Environment (getArgs)
 import System.Exit(exitFailure)
@@ -69,7 +69,7 @@ whenM :: Monad m => m Bool -> m () -> m ()
 whenM cond act = cond >>= flip when act
 
 logCompileError :: MonadLogger m => [Text] -> m ()
-logCompileError e = mapM_ ($(logError) . ("\n"<>)) e
+logCompileError = $(logError) . ("\n"<>) . T.unlines
 
 decodeAndCompile :: FilePath -> IO (Either [Text] RunnableConfig)
 decodeAndCompile fname = do
