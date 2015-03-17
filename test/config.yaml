@@ -9,11 +9,7 @@ watchers:
       - lala
       - lolo
     preprocessor:
-      eval:
-        filename ->
-          [ (modifyBaseName filename ("foo_"++), Nothing)
-          , (modifyBaseName filename ("bar_"++), Nothing)
-          ]
+      eval: yieldModifiedBaseName ("foo_"++)
   - name: importPlugin
     paths:
       - lala
@@ -26,14 +22,14 @@ watchers:
       - lala
       - lolo
     preprocessor:
-      eval: filename ->
+      eval: \filename ->
               let {
                 foo="bar";
                 bar="foo"
               } in
                 case filename of {
-                  "lala" -> [(foo, Nothing)];
-                  "lolo" -> [(bar, Nothing)];
+                  "lala" -> yieldFilePath foo;
+                  "lolo" -> yieldFilePath bar;
                 }
   - name: shell
     paths:

@@ -2,7 +2,6 @@
 {-# LANGUAGE RecordWildCards #-}
 module System.DirWatch.Compiler (
     EvalEnv (..)
-  , defaultEnv
   , interpret
 ) where
 
@@ -16,6 +15,7 @@ import Data.Text.Lazy.Builder (Builder, toLazyText , fromText)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.Typeable (Typeable, typeOf)
 import Data.Monoid (mempty, mappend)
+import Data.Default (Default(..))
 import GHC hiding (importPaths)
 import GHC.Paths (libdir)
 import ErrUtils
@@ -34,13 +34,14 @@ data EvalEnv
    } deriving (Show)
 
 
-defaultEnv :: EvalEnv
-defaultEnv = EvalEnv {
-    envLibdir      = libdir
-  , envSearchPath  = []
-  , envImports     = []
-  , envTargets     = []
-  }
+instance Default EvalEnv where
+  def
+    = EvalEnv {
+        envLibdir      = libdir
+      , envSearchPath  = []
+      , envImports     = []
+      , envTargets     = []
+      }
 
 interpret
   :: forall a. Typeable a

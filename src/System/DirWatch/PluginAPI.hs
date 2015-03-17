@@ -1,8 +1,11 @@
 {-# LANGUAGE Trustworthy #-}
 module System.DirWatch.PluginAPI (
     modifyBaseName
+  , yieldModifiedBaseName
   , toLazyBytesStringC
   , toStrictByteStringC
+  , formatTime
+  , formattedCurrentTime
   , module API
 ) where
 
@@ -21,11 +24,18 @@ import Data.Aeson as API (
   , (.!=)
   )
 import System.FilePath.Posix as API
-import System.DirWatch.Processor as API hiding (ProcessorConfig)
+import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
+import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
 import System.DirWatch.ShellEnv as API (envSet, envAppend)
+
+import System.Locale (defaultTimeLocale)
+import qualified Data.Time.Format as F
 
 modifyBaseName :: FilePath -> (FilePath -> FilePath) -> FilePath
 modifyBaseName fpath func = replaceBaseName fpath (func (takeBaseName fpath))
+
+yieldModifiedBaseName :: (FilePath -> FilePath) -> PreProcessor
+yieldModifiedBaseName func = yieldFilePath . flip modifyBaseName func
 
 toLazyBytesStringC :: ProcessorConduit BS.ByteString LBS.ByteString
 toLazyBytesStringC = go []
@@ -46,3 +56,9 @@ toStrictByteStringC = go []
         Just chunk -> go (chunk:chunks)
 {-# INLINE toLazyBytesStringC #-}
 {-# INLINE toStrictByteStringC #-}
+
+formatTime :: F.FormatTime t => String -> t -> String
+formatTime = F.formatTime defaultTimeLocale
+
+formattedCurrentTime :: String -> PreProcessorM String
+formattedCurrentTime fmt = fmap (formatTime fmt) currentTime

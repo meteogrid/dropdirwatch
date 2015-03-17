@@ -9,7 +9,6 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module System.DirWatch.Processor (
     Processor
-  , PreProcessor
   , ProcessorM
   , ProcessorConduit
   , ProcessorSource
@@ -65,7 +64,6 @@ import System.DirWatch.Logging (
     MonadLogger
   , LoggingT
   , runStderrLoggingT
-  , logDebug
   )
 import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
@@ -86,9 +84,6 @@ import System.IO (Handle)
 type ProcessorConduit i o = Conduit i ProcessorM o
 type ProcessorSource o = Source ProcessorM o
 
-type PreProcessor
-  = FilePath
- -> [(FilePath, Maybe (ProcessorConduit ByteString ByteString))]
 type Processor = FilePath -> ProcessorSource ByteString -> ProcessorM ()
 
 data ProcessorConfig
@@ -151,7 +146,6 @@ runProcessorM cfg act = do
   return ret
   where
     cleanup env = do
-      runStderrLoggingT $ $(logDebug) "Cleanup env"
       readIORef (pProcs env) >>= mapM_ killProc
       readIORef (pThreads env) >>= mapM_ (catchKillErr . Th.killSomeChild)
     killProc p = catchKillErr $ do

@@ -14,6 +14,7 @@ import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Control.Monad.IO.Class(liftIO)
+import Data.Default (def)
 import Data.Monoid ((<>))
 import Data.Typeable (Typeable)
 import Data.Text (Text, pack)
@@ -29,7 +30,7 @@ import System.DirWatch.Config (
   , compileWith
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
-import System.DirWatch.Compiler
+import System.DirWatch.Compiler (EvalEnv(..), interpret)
 
 data CompilerConfig
   = CompilerConfig {
@@ -69,12 +70,10 @@ compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
   sp <- lift $ asks ccSearchPath
-  let env = defaultEnv { envImports=map fst pluginImports
-                       , envSearchPath=sp
-                       }
+  let env = def {envImports=map fst pluginImports, envSearchPath=sp}
   eRet <- liftIO $ case spec of
     EvalCode s ->
-      interpret env ('\\':s)
+      interpret env s
     ImportCode m s c -> do
       let env' = env {envTargets=[m]}
           cmd = concat ["\\c -> case parseEither parseJSON (Object c) of {"

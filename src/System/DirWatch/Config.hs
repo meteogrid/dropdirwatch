@@ -32,7 +32,8 @@ import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.GlobPattern (GlobPattern)
 import System.DirWatch.ShellEnv (ShellEnv)
-import System.DirWatch.Processor (PreProcessor, Processor)
+import System.DirWatch.Processor (Processor)
+import System.DirWatch.PreProcessor (PreProcessor)
 
 data Config w
   = Config {

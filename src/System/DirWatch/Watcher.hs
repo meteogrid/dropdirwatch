@@ -13,6 +13,7 @@ module System.DirWatch.Watcher (
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
+import Control.Arrow (second)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Exception (try, finally)
 import Control.Monad (forM_, forM)
@@ -40,8 +41,8 @@ import Data.HashMap.Strict as HM (
   , fromList
   )
 import Data.Maybe (catMaybes, fromMaybe)
-import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
-import Data.Time.Clock (getCurrentTime, utctDay, utctDayTime)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
+import Data.Time.Clock (UTCTime, getCurrentTime, utctDay, utctDayTime)
 import System.INotify (
     INotify
   , Event (..)
@@ -79,10 +80,12 @@ import System.DirWatch.Logging (
   , fromStrings
   )
 import System.DirWatch.Processor (
-    ProcessorConfig (..)
+    ProcessorM
+  , ProcessorConfig (..)
   , ProcessorError
   , runProcessorM
   )
+import System.DirWatch.PreProcessor (runPreProcessor, yieldFilePath)
 
 type StopCond = MVar ()
 type ThreadMap = HashMap FilePath [FileProcessor]
@@ -271,32 +274,31 @@ registerFailure fname wch err = do
 
               
 runWatcherOnFile :: RunnableWatcher -> FilePath -> WatcherM ()
-runWatcherOnFile wch@Watcher{..} filename = do
+runWatcherOnFile wch filename = do
   cfg <- processorConfig
   chan <- asks wChan
+  start <- liftIO getPOSIXTime
+  let action = createWatcherProcessor (posixSecondsToUTCTime start) filename wch
   fp <- liftIO $ do
     th <- forkChild $ finally (runProcessorM cfg action) (writeChan chan WakeUp)
-    start <- getPOSIXTime
     return FileProcessor { fpHandle  = toSomeThreadHandle th
                          , fpStart   = start
                          , fpWatcher = wch}
   addToRunningProcessors filename fp
   where
-    action = do
-      $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
-      case wProcessor of
-        Just p  -> do
-          let pairs = case wPreProcessor of
-                Nothing -> [(filename, Nothing)]
-                Just pp ->  (getCompiled pp) filename
-          pairs' <- forM pairs $ \(fname, mConduit) -> do
-            let content = case mConduit of
-                            Just c  -> sourceFile filename $= c
-                            Nothing -> sourceFile filename
-            return (fname, content)
-          mapM_ (uncurry $ getCompiled p) pairs'
-          $(logInfo) $ fromStrings ["Finished ", wName, " on ", filename]
-        Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
+
+createWatcherProcessor :: UTCTime -> FilePath -> RunnableWatcher -> ProcessorM ()
+createWatcherProcessor now filename Watcher{..} = do
+  $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
+  case wProcessor of
+    Just compiled  -> do
+      let preprocess = maybe yieldFilePath getCompiled wPreProcessor
+          process = uncurry $ getCompiled compiled
+          applyPP = second (sourceFile filename $=)
+          pairs = map applyPP (runPreProcessor now (preprocess filename))
+      mapM_ process pairs
+      $(logInfo) $ fromStrings ["Finished ", wName, " on ", filename]
+    Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 
 
 processorConfig :: WatcherM ProcessorConfig

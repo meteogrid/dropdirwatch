@@ -3,6 +3,7 @@ module System.DirWatch.ProcessorSpec (main, spec) where
 
 import Test.Hspec
 import System.DirWatch.PluginAPI
+import System.DirWatch.Processor (runProcessorM)
 import Data.ByteString.Char8 as BS
 import Data.Default (def)
 
