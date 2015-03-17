@@ -103,7 +103,7 @@ runProcessorEnv env
   . runResourceT
   . runStderrLoggingT
   . runExceptT
-  . intercept
+  . E.handle (E.throwE . ProcessorException)
   . unProcessorM
 
 deriving instance Typeable ConduitM
@@ -236,5 +236,3 @@ catchE :: ProcessorM a -> (ProcessorError -> ProcessorM a) -> ProcessorM a
 catchE act handler = do
   env <- ProcessorM ask
   either handler return =<< liftIO (runProcessorEnv env act)
-
-intercept = E.handle (E.throwE . ProcessorException)

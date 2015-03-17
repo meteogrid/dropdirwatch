@@ -5,6 +5,7 @@ module System.DirWatch.PluginAPI (
 ) where
 
 import Control.Applicative as API (pure, (<$>), (<*>), (<|>))
+import Data.Conduit as API
 import Data.Conduit.Binary as API
 import Data.Monoid as API (mempty, mappend, (<>))
 import Data.Aeson as API (

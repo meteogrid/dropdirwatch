@@ -8,8 +8,8 @@ module System.DirWatch.Compiler (
 
 import Control.Exception (IOException, Handler(Handler), catches)
 import Control.Monad (void)
-import Data.Text (Text)
 import Data.Char (isDigit)
+import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as LT
 import Data.Text.Lazy.Builder (Builder, toLazyText , fromText)
@@ -22,8 +22,8 @@ import ErrUtils
 import HscTypes
 import Outputable (initSDocContext, runSDoc)
 import DynFlags
+import System.IO.Temp (withSystemTempDirectory)
 import Unsafe.Coerce (unsafeCoerce)
-
 
 data EvalEnv
  = EvalEnv {
@@ -47,22 +47,27 @@ interpret
   => EvalEnv
   -> String
   -> IO (Either [Text] a)
-interpret env code = do
+interpret env code = withSystemTempDirectory ".dropdirwatch_objs" $ \dir -> do
   logRef <- newIORef mempty :: (IO (IORef Builder))
   let compileAndLoad = do
         dflags <- getSessionDynFlags
-        let dflags' = dynamicTooMkDynamicDynFlags . updOptLevel 2 $ dflags {
-                mainFunIs     = Nothing
-              --, safeHaskell   = Sf_Safe
-              , ghcLink       = LinkInMemory
-              , ghcMode       = CompManager
-              , hscTarget     = HscAsm
-              , objectDir     = Just "/tmp/.ghcobjs"
-              , hiDir         = Just "/tmp/.ghcobjs"
-              , importPaths   = envSearchPath env
-              , log_action    = logHandler logRef
-              , verbosity     = 3
-              }
+        let dflags' = dynamicTooMkDynamicDynFlags
+                    . updOptLevel 2
+                    . setTmpDir dir
+                    $ dflags {
+                        mainFunIs     = Nothing
+                      --, safeHaskell   = Sf_Safe
+                      , outputHi      = Nothing
+                      , outputFile    = Nothing
+                      , ghcLink       = LinkInMemory
+                      , ghcMode       = CompManager
+                      , hscTarget     = HscAsm
+                      , objectDir     = Just dir
+                      , hiDir         = Just dir
+                      , importPaths   = envSearchPath env
+                      , log_action    = logHandler logRef
+                      , verbosity     = 3
+                      }
         void $ setSessionDynFlags dflags'
         defaultCleanupHandler dflags' $ do
           targets <- mapM (\m -> guessTarget m Nothing) (envTargets env)
@@ -70,8 +75,7 @@ interpret env code = do
           void $ load LoadAllTargets
           importModules (envImports env ++ envTargets env)
           fmap (Right . unsafeCoerce) $
-            compileExpr (parens code ++ " :: " ++ show (typeOf (undefined :: a)))
-
+            compileExpr $ parens code ++ " :: " ++ show (typeOf (undefined :: a))
       handleEx e = do
         msg <- fmap (map LT.toStrict . LT.lines . toLazyText) $ readIORef logRef
         return $ Left (if not (null msg) then msg else [T.pack e])

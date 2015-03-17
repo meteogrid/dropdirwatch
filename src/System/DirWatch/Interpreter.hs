@@ -14,8 +14,9 @@ import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Control.Monad.IO.Class(liftIO)
+import Data.Monoid ((<>))
 import Data.Typeable (Typeable)
-import Data.Text (Text)
+import Data.Text (Text, pack)
 import System.DirWatch.Logging (fromStrings)
 import System.DirWatch.Config (
     Config(..)
@@ -87,7 +88,8 @@ compileCode spec = Compiler $ do
         Right eO ->
           case eO c of 
             Right o -> Right o
-            Left e -> Left $ "Error when parsing plugin config:":e
+            Left e -> Left $
+                        ["Error when parsing plugin config: " <> pack e]
         Left es -> Left $
                     (fromStrings ["Error when compiling ", m, ".", s]):es
   either throwE return eRet
