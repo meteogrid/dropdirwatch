@@ -6,12 +6,13 @@ module System.DirWatch.Compiler (
   , interpret
 ) where
 
-import Data.ByteString.Builder (Builder, toLazyByteString , byteString)
 import Control.Exception (IOException, Handler(Handler), catches)
 import Control.Monad (void)
-import Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy as LBS
+import Data.Text (Text)
+import Data.Char (isDigit)
+import qualified Data.Text as T
+import qualified Data.Text.Lazy as LT
+import Data.Text.Lazy.Builder (Builder, toLazyText , fromText)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.Typeable (Typeable, typeOf)
 import Data.Monoid (mempty, mappend)
@@ -19,7 +20,7 @@ import GHC hiding (importPaths)
 import GHC.Paths (libdir)
 import ErrUtils
 import HscTypes
-import Outputable
+import Outputable (initSDocContext, runSDoc)
 import DynFlags
 import Unsafe.Coerce (unsafeCoerce)
 
@@ -41,19 +42,18 @@ defaultEnv = EvalEnv {
   , envTargets     = []
   }
 
-interpret :: forall a.
-    Typeable a =>
-    EvalEnv ->
-    String ->
-    IO (Either ByteString a)
-
+interpret
+  :: forall a. Typeable a
+  => EvalEnv
+  -> String
+  -> IO (Either [Text] a)
 interpret env code = do
   logRef <- newIORef mempty :: (IO (IORef Builder))
   let compileAndLoad = do
         dflags <- getSessionDynFlags
         let dflags' = dynamicTooMkDynamicDynFlags . updOptLevel 2 $ dflags {
                 mainFunIs     = Nothing
-              , safeHaskell   = Sf_Safe
+              --, safeHaskell   = Sf_Safe
               , ghcLink       = LinkInMemory
               , ghcMode       = CompManager
               , hscTarget     = HscAsm
@@ -61,7 +61,7 @@ interpret env code = do
               , hiDir         = Just "/tmp/.ghcobjs"
               , importPaths   = envSearchPath env
               , log_action    = logHandler logRef
-              , verbosity     = 0
+              , verbosity     = 3
               }
         void $ setSessionDynFlags dflags'
         defaultCleanupHandler dflags' $ do
@@ -70,12 +70,11 @@ interpret env code = do
           void $ load LoadAllTargets
           importModules (envImports env ++ envTargets env)
           fmap (Right . unsafeCoerce) $
-            compileExpr (code ++ " :: " ++ show (typeOf (undefined :: a)))
+            compileExpr (parens code ++ " :: " ++ show (typeOf (undefined :: a)))
 
       handleEx e = do
-        msg <- fmap toLazyByteString $ readIORef logRef
-        let bsMsg = LBS.toStrict msg
-        return $ Left (if LBS.length msg > 0 then bsMsg else BS.pack e)
+        msg <- fmap (map LT.toStrict . LT.lines . toLazyText) $ readIORef logRef
+        return $ Left (if not (null msg) then msg else [T.pack e])
 
   (runGhc (Just (envLibdir env)) compileAndLoad) `catches` [
         Handler (\(e :: SourceError) -> handleEx (show e))
@@ -101,4 +100,9 @@ logHandler ref dflags severity srcSpan style msg =
      _        ->  return () -- ignore the rest
   where cntx = initSDocContext dflags style
         locMsg = mkLocMessage severity srcSpan msg
-        printDoc = byteString . BS.pack . show $ runSDoc locMsg cntx
+        printDoc = fromText . T.pack . show $ runSDoc locMsg cntx
+
+-- |stolen from hint
+parens :: String -> String
+parens s = concat ["(let {", foo, " =\n", s, "\n;} in ", foo, ")"]
+  where foo = "e_1" ++ filter isDigit s

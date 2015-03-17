@@ -15,9 +15,8 @@ import Control.Monad.Trans (lift)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Control.Monad.IO.Class(liftIO)
 import Data.Typeable (Typeable)
-import Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as BS
-import Data.Monoid
+import Data.Text (Text)
+import System.DirWatch.Logging (fromStrings)
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
@@ -39,17 +38,17 @@ data CompilerConfig
 
 newtype Compiler a
   = Compiler {
-      unCompiler :: ExceptT ByteString (ReaderT CompilerConfig IO) a
+      unCompiler :: ExceptT [Text] (ReaderT CompilerConfig IO) a
   } deriving (Functor, Applicative, Monad)
 
 compileConfig
-  :: SerializableConfig -> IO (Either ByteString RunnableConfig)
+  :: SerializableConfig -> IO (Either [Text] RunnableConfig)
 compileConfig c = runCompiler cConfig $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
   where cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
 
-runCompiler :: CompilerConfig -> Compiler a -> IO (Either ByteString a)
+runCompiler :: CompilerConfig -> Compiler a -> IO (Either [Text] a)
 runCompiler c = flip runReaderT c . runExceptT . unCompiler
 
 
@@ -75,23 +74,22 @@ compileCode spec = Compiler $ do
                        }
   eRet <- liftIO $ case spec of
     EvalCode s ->
-      interpret env ("let sym = \\"<>s<>" in sym")
+      interpret env ('\\':s)
     ImportCode m s c -> do
       let env' = env {envTargets=[m]}
-          cmd = concat [
-                  "let sym = \\c -> case parseEither parseJSON (Object c) of {"
+          cmd = concat ["\\c -> case parseEither parseJSON (Object c) of {"
                 , "          Right v -> Right (", s, " v);"
                 , "          Left e  -> Left e;"
                 , "          }"
-                , "in sym"
                 ]
       eOut <- interpret env' cmd
       return $ case eOut of
         Right eO ->
           case eO c of 
             Right o -> Right o
-            Left e -> Left $ "Error when parsing plugin config: " <> BS.pack e
-        Left e -> Left e
+            Left e -> Left $ "Error when parsing plugin config:":e
+        Left es -> Left $
+                    (fromStrings ["Error when compiling ", m, ".", s]):es
   either throwE return eRet
     
 pluginImports :: [(String, Maybe String)]

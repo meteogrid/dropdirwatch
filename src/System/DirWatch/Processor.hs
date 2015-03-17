@@ -37,8 +37,9 @@ import Control.Exception.Lifted as E (
   )
 import Control.Monad.Reader (MonadReader(..), asks, ReaderT, runReaderT)
 import Control.Monad.Base (MonadBase)
+import Control.Monad.Catch (MonadThrow)
 import Control.Monad.Trans.Except (ExceptT, runExceptT)
-import Control.Monad.Trans.Resource (ResourceT, runResourceT)
+import Control.Monad.Trans.Resource (MonadResource, ResourceT, runResourceT)
 import qualified Control.Monad.Trans.Except as E
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Conduit (Conduit, ConduitM, Source, ($$))
@@ -67,8 +68,8 @@ import System.IO (Handle)
 
 type PreProcessor
   = FilePath
- -> [(FilePath, Maybe (Conduit ByteString (ResourceT IO) ByteString))]
-type Processor = FilePath -> Source (ResourceT IO) ByteString -> ProcessorM ()
+ -> [(FilePath, Maybe (Conduit ByteString ProcessorM ByteString))]
+type Processor = FilePath -> Source ProcessorM ByteString -> ProcessorM ()
 
 data ProcessorConfig
   = ProcessorConfig {
@@ -90,11 +91,20 @@ instance Default ProcessorConfig where
 newtype ProcessorM a
   = ProcessorM {
       unProcessorM :: ExceptT ProcessorError (
-        LoggingT (ReaderT ProcessorEnv IO)
+        LoggingT (ResourceT (ReaderT ProcessorEnv IO))
         ) a
       }
   deriving ( Functor, Applicative, Monad, MonadLogger
-           , MonadIO, MonadBase IO, Typeable)
+           , MonadIO, MonadBase IO, Typeable, MonadThrow, MonadResource)
+
+runProcessorEnv :: ProcessorEnv -> ProcessorM a -> IO (Either ProcessorError a)
+runProcessorEnv env
+  = flip runReaderT env
+  . runResourceT
+  . runStderrLoggingT
+  . runExceptT
+  . intercept
+  . unProcessorM
 
 deriving instance Typeable ConduitM
 
@@ -130,18 +140,11 @@ runProcessorM cfg act = do
     handleKillErr :: SomeException -> IO ()
     handleKillErr _ = return () -- TODO Log error
 
-runProcessorEnv :: ProcessorEnv -> ProcessorM a -> IO (Either ProcessorError a)
-runProcessorEnv env
-  = flip runReaderT env
-  . runStderrLoggingT
-  . runExceptT
-  . intercept
-  . unProcessorM
 
 data ShellCmd
   = ShellCmd {
       shCmd   :: String
-    , shInput :: Maybe (Source (ResourceT IO) ByteString)
+    , shInput :: Maybe (Source ProcessorM ByteString)
     , shEnv   :: ShellEnv
   }
 
@@ -173,7 +176,7 @@ executeShellCmd ShellCmd{..} = do
     p <- createProcess process
     case (p, shInput) of
       ((Just s_in, Just s_out, Just s_err, ph), Just input) -> do
-        liftIO . runResourceT $ input $$ sinkHandle s_in
+        input $$ sinkHandle s_in
         exitCode <- waitForProcess ph
         liftIO $ do
           out <- BS.hGetContents s_out
@@ -234,7 +237,4 @@ catchE act handler = do
   env <- ProcessorM ask
   either handler return =<< liftIO (runProcessorEnv env act)
 
-intercept
-  :: ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO)) a
-  -> ExceptT ProcessorError (LoggingT (ReaderT ProcessorEnv IO)) a
 intercept = E.handle (E.throwE . ProcessorException)

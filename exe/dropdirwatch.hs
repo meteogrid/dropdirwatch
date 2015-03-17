@@ -1,10 +1,13 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
 import Control.Monad (void)
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import System.Environment (getArgs)
+import Data.Text (Text)
 import System.DirWatch
+import System.Environment (getArgs)
+import System.Exit(exitFailure)
 import System.INotify
 
 main :: IO ()
@@ -23,7 +26,7 @@ main = do
         case eNewConfig of
           Right newConfig -> mainLoop newConfig (Just newState)
           Left e -> do 
-            $(logError) $ fromStrings ["Could not reload config: ", show e]
+            logCompileError e
             mainLoop initialConfig (Just newState)
       watchConfig ino
         = void $ addWatch ino [MoveIn,Modify,OneShot] configFile $ const $ do
@@ -34,16 +37,20 @@ main = do
     Right initialConfig -> withINotify $ \ino -> do
       watchConfig ino
       runStderrLoggingT $ mainLoop initialConfig Nothing
-    Left err -> error $ "Could not parse config: " ++ show err
+    Left err -> runStderrLoggingT (logCompileError err) >> exitFailure
 
 
-decodeAndCompile :: FilePath -> IO (Either String RunnableConfig)
+logCompileError :: MonadLogger m => [Text] -> m ()
+logCompileError e = mapM_ $(logError) e
+
+decodeAndCompile :: FilePath -> IO (Either [Text] RunnableConfig)
 decodeAndCompile fname = do
   ePConfig <- decodeFileEither fname
   case ePConfig of
     Right pConfig -> do
-      eConfig <- compileConfig pConfig
-      return $ case eConfig of
-        Right config -> Right config
-        Left e       -> Left $ "Could not compile config: " ++  show e
-    Left e    -> return . Left $ "Could not parse YAML: " ++ show e
+      eRet <- compileConfig pConfig
+      case eRet of
+        Right c -> return (Right c)
+        Left es -> return (Left ("Error when compiling config:":es))
+    Left e        -> return . Left $
+                       [fromStrings ["Could not parse YAML: ", show e]]

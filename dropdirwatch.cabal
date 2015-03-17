@@ -137,4 +137,5 @@ executable dropdirwatch
     , dropdirwatch
     , transformers
     , hinotify
+    , text
   default-language:    Haskell2010
