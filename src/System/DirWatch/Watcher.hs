@@ -10,6 +10,7 @@ module System.DirWatch.Watcher (
   , runWatchLoop
   , mkStopCond
   , endLoop
+  , processWatcher
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
@@ -276,17 +277,17 @@ runWatcherOnFile wch filename = do
   cfg <- processorConfig
   chan <- asks wChan
   start <- liftIO getPOSIXTime
-  let action = createWatcherProcessor (posixSecondsToUTCTime start) filename wch
+  let proc = processWatcher (posixSecondsToUTCTime start) filename wch
   fp <- liftIO $ do
-    th <- forkChild $ finally (runProcessorM cfg action) (writeChan chan WakeUp)
+    th <- forkChild $ finally (runProcessorM cfg proc) (writeChan chan WakeUp)
     return FileProcessor { fpHandle  = toSomeThreadHandle th
                          , fpStart   = start
                          , fpWatcher = wch}
   addToRunningProcessors filename fp
   where
 
-createWatcherProcessor :: UTCTime -> FilePath -> RunnableWatcher -> ProcessorM ()
-createWatcherProcessor now filename Watcher{..} = do
+processWatcher :: UTCTime -> FilePath -> RunnableWatcher -> ProcessorM ()
+processWatcher now filename Watcher{..} = do
   $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
   case wProcessor of
     Just compiled  -> do
