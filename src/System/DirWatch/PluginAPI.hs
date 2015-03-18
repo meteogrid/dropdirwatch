@@ -67,5 +67,5 @@ toStrictByteStringC = go []
 formatTime :: F.FormatTime t => String -> t -> String
 formatTime = F.formatTime defaultTimeLocale
 
-formattedCurrentTime :: Monad m => String -> PreProcessorM m String
+formattedCurrentTime :: Monad m => String -> PreProcessorT m String
 formattedCurrentTime fmt = liftM (formatTime fmt) getTime

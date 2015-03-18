@@ -47,7 +47,8 @@ type SerializableConfig = Config SerializableWatcher
 type RunnableConfig  = Config RunnableWatcher
 type SerializableWatcher = Watcher Code ProcessorCode
 type RunnableWatcher
-  = Watcher (Compiled (PreProcessor ProcessorM) Code) (Compiled Processor ProcessorCode)
+  = Watcher (Compiled (PreProcessor ProcessorM) Code)
+            (Compiled Processor ProcessorCode)
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}

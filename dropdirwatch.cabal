@@ -50,13 +50,13 @@ source-repository head
 library
   exposed-modules:     System.DirWatch
                      , System.DirWatch.PluginAPI
+                     , System.DirWatch.PreProcessor
+                     , System.DirWatch.Processor
   other-modules:       System.DirWatch.Config
                      , System.DirWatch.ShellEnv
                      , System.DirWatch.Logging
                      , System.DirWatch.Interpreter
                      , System.DirWatch.Compiler
-                     , System.DirWatch.PreProcessor
-                     , System.DirWatch.Processor
                      , System.DirWatch.Threading
                      , System.DirWatch.Watcher
                      , System.DirWatch.Util
