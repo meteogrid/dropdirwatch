@@ -14,7 +14,7 @@ spec = do
       takePatternDirectory "/usr/local/*/foo" `shouldBe` "/usr/local/"
     it "will be root if wildcard on first token" $ do
       takePatternDirectory "/*/local/config" `shouldBe` "/"
-    it "is id if direcotry without wildcards" $ do
+    it "is id if directory without wildcards" $ do
       takePatternDirectory "/usr/local/config/" `shouldBe` "/usr/local/config/"
     it "is id if a file without wildcards" $ do
       takePatternDirectory "/usr/local/config" `shouldBe` "/usr/local/config"

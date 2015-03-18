@@ -82,9 +82,9 @@ import qualified System.Process as P (createProcess, waitForProcess)
 import System.IO (Handle)
 
 type ProcessorConduit i o = Conduit i ProcessorM o
-type ProcessorSource o = Source ProcessorM o
+type ProcessorSource = Source ProcessorM ByteString
 
-type Processor = FilePath -> ProcessorSource ByteString -> ProcessorM ()
+type Processor = FilePath -> ProcessorSource -> ProcessorM ()
 
 data ProcessorConfig
   = ProcessorConfig {
@@ -164,7 +164,7 @@ runProcessorM cfg act = do
 data ShellCmd
   = ShellCmd {
       shCmd   :: String
-    , shInput :: Maybe (ProcessorSource ByteString)
+    , shInput :: Maybe ProcessorSource
     , shEnv   :: ShellEnv
   }
 

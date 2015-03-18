@@ -39,10 +39,8 @@ Flag CompilePlugins
 
 Flag DynamicLinking
   Description: Enable DynamicLinking of executables. Will also need to have all
-               dependencies compiled as with "-shared"
-               WARNING: If DynamicLinking is also enabled plugins won't be
-               properly reloaded when they're modfied. This is probably related
-               to https://ghc.haskell.org/trac/ghc/ticket/8238
+               dependencies compiled as with "-shared".
+               Recommended because https://ghc.haskell.org/trac/ghc/ticket/9314.
   Default:     False
 
 source-repository head

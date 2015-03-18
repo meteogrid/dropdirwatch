@@ -13,7 +13,6 @@ module System.DirWatch.Watcher (
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
-import Control.Arrow (second)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Exception (try, finally)
 import Control.Monad (forM_, forM)
@@ -27,7 +26,6 @@ import Control.Monad.State.Strict (
   , runStateT
   )
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
-import Data.Conduit (($=))
 import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
@@ -292,11 +290,11 @@ createWatcherProcessor now filename Watcher{..} = do
   $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
   case wProcessor of
     Just compiled  -> do
-      let preprocess = maybe yieldFilePath getCompiled wPreProcessor
-          process = uncurry $ getCompiled compiled
-          applyPP = second (sourceFile filename $=)
-          pairs = map applyPP (runPreProcessor now (preprocess filename))
-      mapM_ process pairs
+      let preprocessor = maybe yieldFilePath getCompiled wPreProcessor
+          preprocess   = runPreProcessor source now (preprocessor filename)
+          process      = uncurry $ getCompiled compiled
+          source       = sourceFile filename
+      preprocess >>= mapM_ process
       $(logInfo) $ fromStrings ["Finished ", wName, " on ", filename]
     Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 

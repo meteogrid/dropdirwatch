@@ -12,10 +12,6 @@ module System.DirWatch.PluginAPI (
 
 import Control.Applicative as API (pure, (<$>), (<*>), (<|>))
 import Control.Monad.Trans.Resource as API (ResourceT)
-import Data.Conduit as API
-import Data.Conduit.Binary as API
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy as LBS
 import Data.Monoid as API (mempty, mappend, (<>))
 import Data.Aeson as API (
     FromJSON (..)
@@ -28,6 +24,10 @@ import System.FilePath.Posix as API
 import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
 import System.DirWatch.ShellEnv as API (envSet, envAppend)
+
+import Data.Conduit as API ((=$=), await, yield)
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy as LBS
 
 #if MIN_VERSION_time(1,5,0)
 import Data.Time.Format(defaultTimeLocale)
@@ -66,4 +66,4 @@ formatTime :: F.FormatTime t => String -> t -> String
 formatTime = F.formatTime defaultTimeLocale
 
 formattedCurrentTime :: String -> PreProcessorM String
-formattedCurrentTime fmt = fmap (formatTime fmt) currentTime
+formattedCurrentTime fmt = fmap (formatTime fmt) getTime
