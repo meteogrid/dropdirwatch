@@ -32,7 +32,7 @@ import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.GlobPattern (GlobPattern)
 import System.DirWatch.ShellEnv (ShellEnv)
-import System.DirWatch.Processor (Processor)
+import System.DirWatch.Processor (Processor, ProcessorM)
 import System.DirWatch.PreProcessor (PreProcessor)
 
 data Config w
@@ -47,7 +47,7 @@ type SerializableConfig = Config SerializableWatcher
 type RunnableConfig  = Config RunnableWatcher
 type SerializableWatcher = Watcher Code ProcessorCode
 type RunnableWatcher
-  = Watcher (Compiled PreProcessor Code) (Compiled Processor ProcessorCode)
+  = Watcher (Compiled (PreProcessor ProcessorM) Code) (Compiled Processor ProcessorCode)
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}

@@ -1,5 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE KindSignatures #-}
 module System.DirWatch.PreProcessor (
     PreProcessor
   , PreProcessorM
@@ -15,63 +16,65 @@ module System.DirWatch.PreProcessor (
 import Control.Applicative (Applicative)
 import Control.Monad (forM_)
 import Control.Monad.Trans (lift)
+import Control.Monad.Trans.Resource (MonadResource)
 import Control.Monad.Reader (asks, ReaderT, runReaderT)
 import Control.Monad.Writer (MonadWriter(tell), WriterT, execWriterT)
 import Data.Typeable (Typeable)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Lazy as LBS
 import Data.Time (UTCTime)
-import System.DirWatch.Processor (ProcessorConduit, ProcessorSource, ProcessorM)
-import Data.Conduit ((=$=), ($$))
+import Data.Conduit (Conduit, Source, (=$=), ($$))
 import qualified Data.Conduit.Binary as CB
 
-type PreProcessor = FilePath -> PreProcessorM ()
+type PreProcessor m = FilePath -> PreProcessorM m ()
 
-type PreProcessorOutput = [(FilePath, ProcessorSource)]
+type PreProcessorOutput m = [(FilePath, Source m ByteString)]
 
-data PreProcessorEnv
+data PreProcessorEnv m
   = PreProcessorEnv {
       ppeTime   :: UTCTime
-    , ppeSource :: ProcessorSource
+    , ppeSource :: Source m ByteString
   } deriving Typeable
 
-newtype PreProcessorM a
+newtype PreProcessorM (m :: * -> *) a
   = PreProcessorM {
-      unPreProcessorM :: WriterT PreProcessorOutput (
-        ReaderT PreProcessorEnv ProcessorM
+      unPreProcessorM :: WriterT (PreProcessorOutput m) (
+        ReaderT (PreProcessorEnv m) m
         ) a
   } deriving (Functor, Applicative, Monad, Typeable)
 
 runPreProcessor
-  :: ProcessorSource -> UTCTime -> PreProcessorM ()
-  -> ProcessorM PreProcessorOutput
+  :: Monad m
+  => Source m ByteString -> UTCTime -> PreProcessorM m ()
+  -> m (PreProcessorOutput m)
 runPreProcessor source time
   = flip runReaderT env . execWriterT . unPreProcessorM
   where env = PreProcessorEnv {ppeTime=time, ppeSource=source}
 
-getTime :: PreProcessorM UTCTime
+getTime :: Monad m => PreProcessorM m UTCTime
 getTime = PreProcessorM (asks ppeTime)
 
-getSource :: PreProcessorM ProcessorSource
+getSource :: Monad m => PreProcessorM m (Source m ByteString)
 getSource = PreProcessorM (asks ppeSource)
 
-getLbs :: PreProcessorM LBS.ByteString
+getLbs :: MonadResource m => PreProcessorM m LBS.ByteString
 getLbs = PreProcessorM (asks ppeSource) >>= liftProcessor . ($$ CB.sinkLbs)
 
-yieldSource :: FilePath -> ProcessorSource -> PreProcessorM ()
+yieldSource :: Monad m => FilePath -> Source m ByteString -> PreProcessorM m ()
 yieldSource filepath source = PreProcessorM $ tell [(filepath, source)]
 
 
-yieldFilePath :: FilePath -> PreProcessorM ()
+yieldFilePath :: Monad m => FilePath -> PreProcessorM m ()
 yieldFilePath filepath = getSource >>= yieldSource filepath
 
-yieldConduit ::
-  FilePath -> ProcessorConduit ByteString ByteString -> PreProcessorM ()
+yieldConduit
+  :: Monad m
+  => FilePath -> Conduit ByteString m ByteString -> PreProcessorM m ()
 yieldConduit filepath conduit
   = getSource >>= yieldSource filepath . (=$= conduit)
 
 infixr 0 =>=
-(=>=) :: PreProcessor -> PreProcessor -> PreProcessor
+(=>=) :: Monad m => PreProcessor m -> PreProcessor m -> PreProcessor m
 ppA =>= ppB = \filepath -> do
   time <- getTime
   src <- getSource
@@ -81,5 +84,5 @@ ppA =>= ppB = \filepath -> do
     mapM_ (uncurry yieldSource) pairsB
 {-# INLINE (=>=) #-}
 
-liftProcessor :: ProcessorM a -> PreProcessorM a
+liftProcessor :: Monad m => m a -> PreProcessorM m a
 liftProcessor = PreProcessorM . lift . lift

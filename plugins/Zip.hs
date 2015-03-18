@@ -17,7 +17,7 @@ newtype Prefix = Prefix String
 instance FromJSON Prefix where
   parseJSON (Object v) = Prefix <$> v .: "prefix"
 
-addPrefixToZipContents :: Prefix -> PreProcessor
+addPrefixToZipContents :: MonadResource m => Prefix -> PreProcessor m
 addPrefixToZipContents (Prefix prefix) path = yieldConduit path conduit
   where
     conduit
@@ -32,7 +32,7 @@ newtype GlobPatterns = GlobPatterns (Maybe [GlobPattern])
 instance FromJSON GlobPatterns where
   parseJSON (Object v) = GlobPatterns <$> v .:? "patterns"
 
-extractZip :: GlobPatterns -> PreProcessor
+extractZip :: MonadResource m => GlobPatterns -> PreProcessor m
 extractZip (GlobPatterns mPatterns) _ = do
   (mapM_ yieldEntry . filter matches . zEntries . toArchive =<< getLbs)
   where
