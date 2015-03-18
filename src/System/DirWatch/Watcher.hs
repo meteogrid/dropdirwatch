@@ -260,7 +260,8 @@ archiveFile fname = do
         Left e -> do
           $(logError) $ fromStrings ["Could not archive ", fname, ": ", show e]
           return ()
-        Right () -> $(logInfo) $ fromStrings ["Archived ", fname, " -> ", finalDest]
+        Right () ->
+          $(logInfo) $ fromStrings ["Archived ", fname, " -> ", finalDest]
     Nothing -> return ()
 
 handleRetries :: WatcherM ()

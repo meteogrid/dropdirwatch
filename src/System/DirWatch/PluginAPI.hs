@@ -25,7 +25,7 @@ import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
 import System.DirWatch.ShellEnv as API (envSet, envAppend)
 
-import Data.Conduit as API ((=$=), await, yield)
+import Data.Conduit as API ((=$=), ($$), await, yield)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
 
