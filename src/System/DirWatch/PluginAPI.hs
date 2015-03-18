@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE Trustworthy #-}
 module System.DirWatch.PluginAPI (
     modifyBaseName
@@ -28,8 +29,12 @@ import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
 import System.DirWatch.ShellEnv as API (envSet, envAppend)
 
+#if MIN_VERSION_time(1,5,0)
+import Data.Time.Format(defaultTimeLocale)
+#else
 import System.Locale (defaultTimeLocale)
-import qualified Data.Time.Format as F
+#endif
+import qualified Data.Time.Format as F (FormatTime, formatTime)
 
 modifyBaseName :: FilePath -> (FilePath -> FilePath) -> FilePath
 modifyBaseName fpath func = replaceBaseName fpath (func (takeBaseName fpath))
