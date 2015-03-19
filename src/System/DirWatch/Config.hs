@@ -78,7 +78,7 @@ data Watcher p h
       wName         :: String
     , wPaths        :: [AbsPath]
     , wPreProcessor :: Maybe p
-    , wProcessors   :: [h]
+    , wProcessor    :: Maybe h
   } deriving (Eq, Show)
 
 instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
@@ -87,7 +87,7 @@ instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
         "name"         .= wName
       , "paths"        .= wPaths
       , "preprocessor" .= wPreProcessor
-      , "processors"   .= wProcessors
+      , "processor"    .= wProcessor
     ]
 
 instance FromJSON SerializableWatcher where
@@ -100,8 +100,8 @@ instance FromJSON SerializableWatcher where
       v .:   "name" <*>
       v .:   "paths" <*>
       v .:?  "preprocessor" <*>
-      v .:?  "processors" .!= []
-    where expectedKeys = ["name", "paths", "preprocessor", "processors"]
+      v .:?  "processor"
+    where expectedKeys = ["name", "paths", "preprocessor", "processor"]
           unexpectedKeys = filter (`notElem` expectedKeys) $ HM.keys v
   parseJSON _ = fail "Expected an object for \"watcher\""
 
