@@ -14,9 +14,11 @@ module System.DirWatch.Watcher (
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
+import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Exception (try, finally)
-import Control.Monad (forM_, forM)
+import Control.Monad (forM_, forM, void, when)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.IO.Class (MonadIO(liftIO))
@@ -26,7 +28,6 @@ import Control.Monad.State.Strict (
   , StateT
   , runStateT
   )
-import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
@@ -51,6 +52,7 @@ import System.INotify (
   )
 import System.Directory (createDirectoryIfMissing, renameFile, doesFileExist)
 import System.FilePath.Posix (takeDirectory)
+import System.Posix.Files (getFileStatus, modificationTime)
 import System.IO.Error (tryIOError)
 import System.DirWatch.Config (
     RunnableConfig
@@ -66,6 +68,7 @@ import System.DirWatch.Util (
   , takePatternDirectory
   , archiveDestination
   , toFilePath
+  , absPathsMatching
   )
 
 import System.DirWatch.Threading (
@@ -166,7 +169,8 @@ runWatchLoop
 runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
   env <- WatcherEnv <$> pure cfg <*> newChan <*> pure ino
   let state = fromMaybe mempty mState
-  loopth <- forkChild $ runWatcherEnv env state (setupWatches >> loop)
+  loopth <- forkChild $ runWatcherEnv env state
+                        (setupWatches >> checkExistingFiles >> loop)
   takeMVar stopCond
   writeChan (wChan env) Finish
   fmap snd $ waitChild loopth
@@ -186,14 +190,18 @@ setupWatches = do
       let baseDir  = takePatternDirectory globPattern
           absPath p = joinAbsPath baseDir [p]
           name = wName watcher
+          logArrival file = runStderrLoggingT $
+            $(logInfo) $ fromStrings ["File ", show file, " arrived"]
       mError <- addIWatch baseDir $ \event -> do
         case event of
           MovedIn{..} | absPath filePath `globMatch` globPattern
-                      , not isDirectory ->
+                      , not isDirectory -> do
+            logArrival (absPath filePath)
             writeChan chan $ Work watcher (absPath filePath)
           Closed{..} | wasWriteable, not isDirectory ->
             case maybeFilePath of
-              Just filePath | absPath filePath `globMatch` globPattern ->
+              Just filePath | absPath filePath `globMatch` globPattern -> do
+                logArrival (absPath filePath)
                 writeChan chan $ Work watcher (absPath filePath)
               _ -> return ()
           _ -> return ()
@@ -210,12 +218,33 @@ loop = do
   handleRetries
   msg <- getMessage
   case msg of
-    Work wch file -> do
-      $(logInfo) $ fromStrings ["File ", show file, " arrived"]
-      runWatcherOnFile wch file
-      loop
+    Work wch file -> runWatcherOnFile wch file >> loop
     WakeUp        -> loop
     Finish        -> return ()
+
+checkExistingFiles :: WatcherM ()
+checkExistingFiles = do
+  watchers <- asks (cfgWatchers . wConfig)
+  waitSecs <- asks (cfgWaitSeconds . wConfig)
+  chan <- asks wChan
+  void $ liftIO $ forkChild $ do
+    existing <- fmap (concat . concat) $ forM watchers $ \watcher -> do
+      forM (wPaths watcher) $ \globPattern ->  do
+        paths <- absPathsMatching globPattern
+        forM paths $ \abspath -> do
+           modTime <- fmap modificationTime (getFileStatus (toFilePath abspath))
+           return (modTime, watcher, abspath)
+    threadDelay  $ 1000000 * waitSecs
+    forM_ existing $ \(modTime, watcher, abspath) -> do
+      modTime' <- fmap modificationTime (getFileStatus (toFilePath abspath))
+      when (modTime' == modTime) $ do
+        -- file has not been modified, assume it is stable and work on it.
+        -- If it has been modified we can ignore it assuming we'll be notified
+        -- when it has been closed
+        runStderrLoggingT $ $(logInfo) $
+          fromStrings ["File ", show abspath, " has been stable"]
+        writeChan chan $ Work watcher abspath
+      
 
 addIWatch :: AbsPath -> (Event -> IO ()) -> WatcherM (Maybe IOError)
 addIWatch dir wch = do
@@ -304,7 +333,7 @@ processWatcher now abspath Watcher{..} = do
           source       = sourceFile filepath
           filepath     = toFilePath abspath
       preprocess >>= mapM_ process
-      $(logInfo) $ fromStrings ["Finished ", wName, " on ", show abspath]
+      $(logInfo) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
     Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 
 

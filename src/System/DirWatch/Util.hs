@@ -4,6 +4,7 @@ module System.DirWatch.Util (
   , mkAbsPath
   , joinAbsPath
   , globMatch
+  , absPathsMatching
   , absPathFilename
   , toFilePath
   , takePatternDirectory
@@ -26,6 +27,7 @@ import System.FilePath.Posix (
   , isAbsolute
   )
 import Data.String (IsString(..))
+import System.FilePath.Glob (namesMatching)
 import System.FilePath.GlobPattern ((~~))
 
 -- |Takes the non-wildcard deepest directory name from a GlobPattern
@@ -73,6 +75,11 @@ joinAbsPath (AbsPath base) = AbsPath . joinPath . (base:)
 globMatch :: AbsPath -> AbsPath -> Bool
 globMatch (AbsPath p) (AbsPath g) = p ~~ g
 {-# INLINE globMatch #-}
+
+absPathsMatching :: AbsPath -> IO [AbsPath]
+absPathsMatching (AbsPath pattern) = fmap (map AbsPath) (namesMatching pattern)
+{-# INLINE absPathsMatching #-}
+
 
 toFilePath :: AbsPath -> FilePath
 toFilePath (AbsPath p) = p

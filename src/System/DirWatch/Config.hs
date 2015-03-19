@@ -37,10 +37,11 @@ import System.DirWatch.Util (AbsPath)
 
 data Config w
   = Config {
-      cfgPluginDirs :: [FilePath]
-    , cfgArchiveDir :: Maybe AbsPath
-    , cfgShellEnv   :: ShellEnv
-    , cfgWatchers   :: [w]
+      cfgPluginDirs  :: [FilePath]
+    , cfgArchiveDir  :: Maybe AbsPath
+    , cfgShellEnv    :: ShellEnv
+    , cfgWatchers    :: [w]
+    , cfgWaitSeconds :: Int
   } deriving Show
 
 type SerializableConfig = Config SerializableWatcher
@@ -53,10 +54,11 @@ type RunnableWatcher
 instance ToJSON SerializableConfig where
   toJSON Config{..}
     = object [
-      "archiveDir" .= cfgArchiveDir
-    , "env"        .= cfgShellEnv
-    , "pluginDirs" .= cfgPluginDirs
-    , "watchers"   .= cfgWatchers
+      "archiveDir"  .= cfgArchiveDir
+    , "env"         .= cfgShellEnv
+    , "pluginDirs"  .= cfgPluginDirs
+    , "watchers"    .= cfgWatchers
+    , "waitSeconds" .= cfgWaitSeconds
     ]
 
 instance FromJSON SerializableConfig where
@@ -65,7 +67,8 @@ instance FromJSON SerializableConfig where
       v .:? "pluginDirs" .!= [] <*>
       v .:? "archiveDir" <*>
       v .:? "env" .!= mempty <*>
-      v .:  "watchers"
+      v .:  "watchers" <*>
+      v .:? "waitSeconds" .!= 60
   parseJSON _ = fail "Expected an object"
 
 
