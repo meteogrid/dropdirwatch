@@ -1,4 +1,5 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -31,14 +32,17 @@ import Control.Monad.State.Strict (
 import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
+import Data.List (intercalate, foldl')
 import Data.Fixed (Fixed, E2)
 import Data.HashMap.Strict as HM (
     HashMap
   , insertWith
   , unionWith
   , empty
+  , elems
   , toList
   , fromList
+  , fromListWith
   )
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
@@ -97,6 +101,7 @@ import System.DirWatch.PreProcessor (runPreProcessor, yieldFilePath)
 
 type StopCond = MVar ()
 type ThreadMap = HashMap AbsPath [FileProcessor]
+type DirMap = HashMap AbsPath [RunnableWatcher]
 
 data FileProcessor
   = FileProcessor {
@@ -109,7 +114,7 @@ watchedEvents :: [EventVariety]
 watchedEvents = [MoveIn, CloseWrite]
 
 data ChanMessage
-  = Work RunnableWatcher AbsPath
+  = Work [RunnableWatcher] AbsPath
   | WakeUp
   | Finish
   deriving Show
@@ -119,6 +124,7 @@ data WatcherEnv
       wConfig   :: RunnableConfig
     , wChan     :: Chan ChanMessage
     , wInotify  :: INotify
+    , wDirMap   :: DirMap
   }
 
 data FailedWatcher
@@ -167,13 +173,18 @@ runWatcherEnv env state
 runWatchLoop
   :: RunnableConfig -> Maybe WatcherState -> StopCond -> IO WatcherState
 runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
-  env <- WatcherEnv <$> pure cfg <*> newChan <*> pure ino
+  let dirMap = mkDirMap (cfgWatchers cfg)
+  env <- WatcherEnv <$> pure cfg <*> newChan <*> pure ino <*> pure dirMap
   let state = fromMaybe mempty mState
   loopth <- forkChild $ runWatcherEnv env state
                         (setupWatches >> checkExistingFiles >> loop)
   takeMVar stopCond
   writeChan (wChan env) Finish
   fmap snd $ waitChild loopth
+
+mkDirMap :: [RunnableWatcher] -> DirMap
+mkDirMap ws = foldl' go empty $ [(w,p) | w<-ws, p<-wPaths w]
+  where go m (w,p) = insertWith (++) (takePatternDirectory p) [w] m
 
 endLoop :: StopCond -> IO ()
 endLoop mvar = putMVar mvar ()
@@ -183,32 +194,26 @@ mkStopCond = newEmptyMVar
 
 setupWatches :: WatcherM ()
 setupWatches = do
-  watchers <- asks (cfgWatchers . wConfig)
+  dir_watchers <- asks (toList . wDirMap)
   chan <- asks wChan
-  forM_ watchers $ \watcher -> do
-    forM_ (wPaths watcher) $ \globPattern -> do
-      let baseDir   = takePatternDirectory globPattern
-          absPath p = joinAbsPath baseDir [p]
-          fnameMatches p = absPath p `globMatch` globPattern
-          name = wName watcher
-          logArrival file = runStderrLoggingT $
-            $(logInfo) $ fromStrings ["File ", show file, " arrived"]
-      mError <- addIWatch baseDir $ \event -> do
-        case event of
-          MovedIn{isDirectory=False, ..} | fnameMatches filePath -> do
-            logArrival (absPath filePath)
-            writeChan chan $ Work watcher (absPath filePath)
-          Closed{ wasWriteable=True, isDirectory=False
-                , maybeFilePath=Just filePath} | fnameMatches filePath -> do
-            logArrival (absPath filePath)
-            writeChan chan $ Work watcher (absPath filePath)
-          _ -> return ()
-      case mError of
-        Just e ->
-          $(logWarn) $ fromStrings ["Could not watch ", show baseDir, " for "
-                                   , name, ": ", show e]
-        Nothing ->
-          $(logInfo) $ fromStrings ["Watching ", show baseDir, " for ", name]
+  forM_ dir_watchers $ \(baseDir, watchers) -> do
+    let names = intercalate ", " $ map wName watchers
+        go filePath = do
+          let matchedWatchers = filter (any (p `globMatch`) . wPaths) watchers
+              p = joinAbsPath baseDir [filePath]
+          when (not (null matchedWatchers)) $
+            writeChan chan $ Work matchedWatchers p
+    mError <- addIWatch baseDir $ \case
+                MovedIn{isDirectory=False, ..}       -> go filePath
+                Closed{ wasWriteable=True, isDirectory=False
+                      , maybeFilePath=Just filePath} -> go filePath
+                _ -> return ()
+    case mError of
+      Just e ->
+        $(logWarn) $ fromStrings ["Could not watch ", show baseDir, " for "
+                                 , names, ": ", show e]
+      Nothing ->
+        $(logInfo) $ fromStrings ["Watching ", show baseDir, " for ", names]
 
 loop :: WatcherM ()
 loop = do
@@ -216,24 +221,27 @@ loop = do
   handleRetries
   msg <- getMessage
   case msg of
-    Work wch file -> runWatcherOnFile wch file >> loop
-    WakeUp        -> loop
-    Finish        -> return ()
+    Work ws file -> runWatchersOnFile ws file >> loop
+    WakeUp       -> loop
+    Finish       -> return ()
 
 checkExistingFiles :: WatcherM ()
 checkExistingFiles = do
-  watchers <- asks (cfgWatchers . wConfig)
+  dir_watchers <- asks wDirMap
   waitSecs <- asks (cfgWaitSeconds . wConfig)
   chan <- asks wChan
   void $ liftIO $ forkChild $ do
-    existing <- fmap (concat . concat) $ forM watchers $ \watcher -> do
-      forM (wPaths watcher) $ \globPattern ->  do
-        paths <- absPathsMatching globPattern
-        forM paths $ \abspath -> do
-           modTime <- fmap modificationTime (getFileStatus (toFilePath abspath))
-           return (modTime, watcher, abspath)
+    existingMap <- fmap (fromListWith (++) . concat . concat . concat) $
+      forM (elems dir_watchers) $ \watchers -> do
+        forM watchers $ \watcher -> do
+          forM (wPaths watcher) $ \globPattern ->  do
+            paths <- absPathsMatching globPattern
+            forM paths $ \abspath -> return (abspath, [watcher])
+    existing <- forM (toList existingMap) $ \(abspath, watchers) -> do
+      mt <- fmap modificationTime $ getFileStatus (toFilePath abspath)
+      return (mt, watchers, abspath)
     threadDelay  $ 1000000 * waitSecs
-    forM_ existing $ \(modTime, watcher, abspath) -> do
+    forM_ existing $ \(modTime, watchers, abspath) -> do
       modTime' <- fmap modificationTime (getFileStatus (toFilePath abspath))
       when (modTime' == modTime) $ do
         -- file has not been modified, assume it is stable and work on it.
@@ -241,7 +249,7 @@ checkExistingFiles = do
         -- when it has been closed
         runStderrLoggingT $ $(logInfo) $
           fromStrings ["File ", show abspath, " has been stable"]
-        writeChan chan $ Work watcher abspath
+        writeChan chan $ Work watchers abspath
       
 
 addIWatch :: AbsPath -> (Event -> IO ()) -> WatcherM (Maybe IOError)
@@ -308,18 +316,19 @@ registerFailure fname wch err = do
   return () -- TODO
 
               
-runWatcherOnFile :: RunnableWatcher -> AbsPath -> WatcherM ()
-runWatcherOnFile wch filename = do
+runWatchersOnFile :: [RunnableWatcher] -> AbsPath -> WatcherM ()
+runWatchersOnFile watchers filename = do
   cfg <- processorConfig
   chan <- asks wChan
   start <- liftIO getPOSIXTime
-  let proc = processWatcher (posixSecondsToUTCTime start) filename wch
-  fp <- liftIO $ do
-    th <- forkChild $ finally (runProcessorM cfg proc) (writeChan chan WakeUp)
-    return FileProcessor { fpHandle  = toSomeThreadHandle th
-                         , fpStart   = start
-                         , fpWatcher = wch}
-  addToRunningProcessors filename fp
+  fps <- forM watchers $ \wch -> do
+    let proc = processWatcher (posixSecondsToUTCTime start) filename wch
+    liftIO $ do
+      th <- forkChild $ finally (runProcessorM cfg proc) (writeChan chan WakeUp)
+      return FileProcessor { fpHandle  = toSomeThreadHandle th
+                           , fpStart   = start
+                           , fpWatcher = wch}
+  addToRunningProcessors filename fps
   where
 
 processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
@@ -345,8 +354,8 @@ processorConfig = do
 
 addToRunningProcessors
   :: AbsPath
-  -> FileProcessor
+  -> [FileProcessor]
   -> WatcherM ()
-addToRunningProcessors path fp = do
+addToRunningProcessors path fps = do
   s@WatcherState{wThreads=ts} <- get
-  put $ s {wThreads = insertWith (++) path [fp] ts}
+  put $ s {wThreads = insertWith (++) path fps ts}
