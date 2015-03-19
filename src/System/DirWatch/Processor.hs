@@ -38,6 +38,7 @@ import Control.Exception.Lifted as E (
   , IOException
   , handle
   , catch
+  , finally
   )
 import Control.Monad (void)
 import Control.Monad.Reader (MonadReader(..), asks, ReaderT, runReaderT)
@@ -144,14 +145,12 @@ runProcessorM
   :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
 runProcessorM cfg act = do
   env <- ProcessorEnv <$> pure cfg <*> newIORef [] <*> newIORef []
-  ret <- runProcessorEnv env act
-  cleanup env `catch` (\(_::IOException) -> return ())
-  return ret
+  finally (runProcessorEnv env act) (cleanup env)
   where
-    cleanup env = do
-      readIORef (pProcs env) >>= mapM_ killProc
-      readIORef (pThreads env) >>= mapM_ killThread
-    killProc p = do
+    cleanup env = finally
+      (readIORef (pThreads env) >>= mapM_ killThread)
+      (readIORef (pProcs env) >>= mapM_ killProc)
+    killProc p = flip catch handleProcKillErr $ do
       mExitCode <- getProcessExitCode p
       case mExitCode of
         Nothing -> void $ forkIO $ (do
@@ -162,9 +161,9 @@ runProcessorM cfg act = do
         _       -> return ()
     killThread th = flip catch (handleThreadKillErr th) . Th.killSomeChild $ th
     logIt = runStderrLoggingT . $(logError) . fromStrings
-    handleThreadKillErr th (e :: SomeException)
+    handleThreadKillErr th (e :: IOException)
       = logIt ["Error when killing unfinished thread ", show th, ": ", show e]
-    handleProcKillErr (e :: SomeException)
+    handleProcKillErr (e :: IOException)
       = logIt ["Error when killing unfinished procress: ", show e]
 
 
