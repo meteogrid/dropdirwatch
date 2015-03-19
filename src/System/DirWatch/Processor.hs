@@ -64,6 +64,8 @@ import System.DirWatch.Logging (
     MonadLogger
   , LoggingT
   , runStderrLoggingT
+  , logError
+  , fromStrings
   )
 import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
@@ -138,7 +140,8 @@ instance MonadBaseControl IO ProcessorM where
      liftIO $ f (runProcessorEnv env)
    restoreM = either throwE return
 
-runProcessorM :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
+runProcessorM
+  :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
 runProcessorM cfg act = do
   env <- ProcessorEnv <$> pure cfg <*> newIORef [] <*> newIORef []
   ret <- runProcessorEnv env act
@@ -147,18 +150,22 @@ runProcessorM cfg act = do
   where
     cleanup env = do
       readIORef (pProcs env) >>= mapM_ killProc
-      readIORef (pThreads env) >>= mapM_ (catchKillErr . Th.killSomeChild)
-    killProc p = catchKillErr $ do
+      readIORef (pThreads env) >>= mapM_ killThread
+    killProc p = do
       mExitCode <- getProcessExitCode p
       case mExitCode of
-        Nothing -> void $ forkIO $ do
+        Nothing -> void $ forkIO $ (do
                       terminateProcess p
-                      threadDelay $ 10*1000000 -- give it 10 seconds to die
-                      interruptProcessGroupOf p
+                      threadDelay $ 10*1000000 -- give it 10 seconds to TERM...
+                      interruptProcessGroupOf p -- ... or kill it
+                      ) `catch` handleProcKillErr
         _       -> return ()
-    catchKillErr = flip catch handleKillErr
-    handleKillErr :: SomeException -> IO ()
-    handleKillErr _ = return () -- TODO Log error
+    killThread th = flip catch (handleThreadKillErr th) . Th.killSomeChild $ th
+    logIt = runStderrLoggingT . $(logError) . fromStrings
+    handleThreadKillErr th (e :: SomeException)
+      = logIt ["Error when killing unfinished thread ", show th, ": ", show e]
+    handleProcKillErr (e :: SomeException)
+      = logIt ["Error when killing unfinished procress: ", show e]
 
 
 data ShellCmd

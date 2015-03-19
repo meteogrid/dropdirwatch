@@ -1,4 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE StandaloneDeriving #-}
 module System.DirWatch.Threading (
     ThreadHandle
   , SomeThreadHandle
@@ -13,12 +14,10 @@ module System.DirWatch.Threading (
 ) where
 
 import Control.Exception (throw)
-import System.Mem.Weak (Weak, deRefWeak)
 import Control.Concurrent (
     ThreadId
   , killThread
   , forkFinally
-  , mkWeakThreadId
   )
 import Control.Concurrent.MVar (
     MVar
@@ -30,17 +29,21 @@ import Control.Concurrent.MVar (
 import Unsafe.Coerce (unsafeCoerce)
 
 type Timeout = Int
-newtype ThreadHandle a = ThreadHandle (Weak ThreadId, MVar a)
+newtype ThreadHandle a = ThreadHandle (ThreadId, MVar a)
+instance Show (ThreadHandle a) where
+  show (ThreadHandle (tid,_)) = concat ["ThreadHandle(", show tid, ")"]
+instance Eq (ThreadHandle a) where
+  ThreadHandle (tid1,_) == ThreadHandle (tid2,_) = tid1 == tid2
+  
 
 forkChild :: IO a -> IO (ThreadHandle a)
 forkChild io = do
    mvar <- newEmptyMVar
-   tid <- forkFinally io (putMVar mvar . either throw id) >>= mkWeakThreadId
+   tid <- forkFinally io (putMVar mvar . either throw id)
    return $ ThreadHandle (tid,mvar)
 
 killChild :: ThreadHandle a -> IO ()
-killChild (ThreadHandle (tid,_))
-  = maybe (return ()) killThread =<< deRefWeak tid
+killChild (ThreadHandle (tid,_)) = killThread tid
 
 waitChild :: ThreadHandle a -> IO a
 waitChild (ThreadHandle (_,mvar)) = takeMVar mvar
@@ -57,6 +60,10 @@ tryWaitSomeChild (SomeTH th) = do
     Just (Left e)  -> Just (Just e)
 
 data SomeThreadHandle e = forall a. SomeTH (ThreadHandle (Either e a))
+deriving instance Show (SomeThreadHandle e)
+instance Eq (SomeThreadHandle e) where
+  SomeTH (ThreadHandle (tid1,_)) == SomeTH (ThreadHandle (tid2,_))
+    = tid1 == tid2
 
 toSomeThreadHandle
   :: ThreadHandle (Either e a) 
