@@ -9,7 +9,7 @@ watchers:
       - /lala
       - /lolo
     preprocessor:
-      eval: yieldModifiedBaseName ("foo_"++)
+      eval: yieldFileName . modifyBaseName ("foo_"++)
   - name: importPlugin
     paths:
       - /lala
