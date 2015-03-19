@@ -2,6 +2,12 @@ pluginDirs:
   - test/plugins
 imports:
   - Data.List as L
+processors:
+  someProcessor:
+    eval: undefined
+preprocessors:
+  somePreprocessor:
+    eval: undefined
 env:
   +PATH: /opt/foo 
   FOO: bar
@@ -55,3 +61,10 @@ watchers:
     paths:
       - /lala
       - /lolo
+
+  - name: byName
+    paths:
+      - /lala
+      - /lolo
+    preprocessor: somePreprocessor
+    processor: someProcessor

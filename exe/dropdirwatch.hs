@@ -47,7 +47,7 @@ main = do
     Left err -> runStderrLoggingT (logCompileError err) >> exitFailure
 
 watchNewPluginDirs
-  :: MonadIO m => MVar [FilePath] -> Config w -> m ()
+  :: MonadIO m => MVar [FilePath] -> Config pp p ppc pc -> m ()
 watchConfig
   :: FilePath -> StopCond -> MVar [FilePath] -> INotify -> IO ()
 

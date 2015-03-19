@@ -1,10 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
   , Code (..)
+  , Compiled
+  , SymOrCode (..)
+  , SymbolTable (..)
   , ProcessorCode (..)
   , ModuleImport (..)
   , SerializableConfig
@@ -36,32 +40,46 @@ import System.DirWatch.Processor (Processor, ProcessorM)
 import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Util (AbsPath)
 
-data Config w
+data Config pp p ppc pc
   = Config {
-      cfgPluginDirs  :: [FilePath]
-    , cfgArchiveDir  :: Maybe AbsPath
-    , cfgShellEnv    :: ShellEnv
-    , cfgWatchers    :: [w]
-    , cfgWaitSeconds :: Int
-    , cfgImports     :: [ModuleImport]
+      cfgPluginDirs    :: [FilePath]
+    , cfgArchiveDir    :: Maybe AbsPath
+    , cfgShellEnv      :: ShellEnv
+    , cfgWatchers      :: [Watcher pp p]
+    , cfgWaitSeconds   :: Int
+    , cfgImports       :: [ModuleImport]
+    , cfgProcessors    :: SymbolTable pc
+    , cfgPreProcessors :: SymbolTable ppc
   } deriving Show
 
-type SerializableConfig = Config SerializableWatcher
-type RunnableConfig  = Config RunnableWatcher
-type SerializableWatcher = Watcher Code ProcessorCode
+type SerializableConfig
+  = Config (SymOrCode Code) (SymOrCode ProcessorCode)
+           Code             ProcessorCode
+type SerializableWatcher = Watcher (SymOrCode Code) (SymOrCode ProcessorCode)
+type RunnableConfig
+  = Config (Compiled (PreProcessor ProcessorM) Code)
+           (Compiled Processor ProcessorCode)
+           Code
+           ProcessorCode
 type RunnableWatcher
   = Watcher (Compiled (PreProcessor ProcessorM) Code)
             (Compiled Processor ProcessorCode)
 
+newtype SymbolTable p
+  = SymbolTable (HM.HashMap String p) deriving (Show, Eq, ToJSON, FromJSON)
+
+
 instance ToJSON SerializableConfig where
   toJSON Config{..}
     = object [
-      "archiveDir"  .= cfgArchiveDir
-    , "env"         .= cfgShellEnv
-    , "pluginDirs"  .= cfgPluginDirs
-    , "watchers"    .= cfgWatchers
-    , "waitSeconds" .= cfgWaitSeconds
-    , "imports"     .= cfgImports
+      "archiveDir"    .= cfgArchiveDir
+    , "env"           .= cfgShellEnv
+    , "pluginDirs"    .= cfgPluginDirs
+    , "watchers"      .= cfgWatchers
+    , "waitSeconds"   .= cfgWaitSeconds
+    , "imports"       .= cfgImports
+    , "processors"    .= cfgProcessors
+    , "preprocessors" .= cfgPreProcessors
     ]
 
 instance FromJSON SerializableConfig where
@@ -72,17 +90,22 @@ instance FromJSON SerializableConfig where
       v .:? "env" .!= mempty <*>
       v .:  "watchers" <*>
       v .:? "waitSeconds" .!= 60 <*>
-      v .:? "imports" .!= []
+      v .:? "imports" .!= [] <*>
+      v .:? "processors"    .!= SymbolTable HM.empty <*>
+      v .:? "preprocessors" .!= SymbolTable HM.empty
   parseJSON _ = fail "Expected an object for \"config\""
 
+data SymOrCode code
+  = SymName  String
+  | SymCode  code
+  deriving (Eq, Show)
 
-
-data Watcher p h
+data Watcher pp p
   = Watcher {
       wName         :: String
     , wPaths        :: [AbsPath]
-    , wPreProcessor :: Maybe p
-    , wProcessor    :: Maybe h
+    , wPreProcessor :: Maybe pp
+    , wProcessor    :: Maybe p
   } deriving (Eq, Show)
 
 instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
@@ -109,6 +132,16 @@ instance FromJSON SerializableWatcher where
           unexpectedKeys = filter (`notElem` expectedKeys) $ HM.keys v
   parseJSON _ = fail "Expected an object for \"watcher\""
 
+instance ToJSON code => ToJSON (SymOrCode code) where
+  toJSON (SymName name) = toJSON name
+  toJSON (SymCode code) = toJSON code
+
+instance FromJSON code => FromJSON (SymOrCode code) where
+  parseJSON o@Object{} = SymCode <$> parseJSON o
+  parseJSON s@String{} = SymName <$> parseJSON s
+  parseJSON _          = fail "Must be either string or object"
+
+
 newtype Compiled a code = Compiled (a, code)
 getCompiled :: Compiled a code -> a
 getCompiled (Compiled a) = fst a
@@ -121,6 +154,7 @@ instance Eq code => Eq (Compiled a code) where
 
 compileWith :: Functor m => (code -> m a) -> code -> m (Compiled a code)
 compileWith f code = fmap (\a -> Compiled (a,code)) (f code)
+
 
 instance ToJSON code => ToJSON (Compiled a code) where
   toJSON (Compiled (_,code)) = toJSON code

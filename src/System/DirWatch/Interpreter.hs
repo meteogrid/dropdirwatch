@@ -2,8 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.DirWatch.Interpreter (
-    CompilerConfig (..)
-  , runCompiler
+    runCompiler
   , compileWatcher
   , compileConfig
 ) where
@@ -11,6 +10,7 @@ module System.DirWatch.Interpreter (
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
+import qualified Data.HashMap.Strict as HM
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     InterpreterT
@@ -28,6 +28,9 @@ import Language.Haskell.Interpreter (
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
+  , SymOrCode (..)
+  , SymbolTable (..)
+  , Compiled
   , ModuleImport (..)
   , SerializableConfig
   , SerializableWatcher
@@ -39,29 +42,19 @@ import System.DirWatch.Config (
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
 
-data CompilerConfig
-  = CompilerConfig {
-      ccSearchPath :: [FilePath]
-    , ccImports    :: [ModuleImport]
-  }
-
 newtype Compiler a
   = Compiler {
-      unCompiler :: InterpreterT (ReaderT CompilerConfig IO) a
+      unCompiler :: InterpreterT (ReaderT SerializableConfig IO) a
   } deriving (Functor, Applicative, Monad)
 
 compileConfig
   :: SerializableConfig -> IO (Either InterpreterError RunnableConfig)
-compileConfig c = runCompiler cConfig $ do
+compileConfig c = runCompiler c $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
-  return $ c {cfgWatchers=watchers}
-  where
-    cConfig = CompilerConfig {
-        ccSearchPath = cfgPluginDirs c
-      , ccImports    = cfgImports c
-      }
+  return $ c {cfgWatchers = watchers}
 
-runCompiler :: CompilerConfig -> Compiler a -> IO (Either InterpreterError a)
+runCompiler
+  :: SerializableConfig -> Compiler a -> IO (Either InterpreterError a)
 runCompiler c = flip runReaderT c . runInterpreter . unCompiler
 
 
@@ -69,11 +62,25 @@ compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
 compileWatcher w = do
   mPp <- case wPreProcessor w of
           Nothing -> return Nothing
-          Just p  -> fmap Just $ compileWith compileCode p
+          Just p  -> do
+            syms <- Compiler $ lift $ asks cfgPreProcessors
+            fmap Just $ compileSymOrCodeWith compileCode p syms
   mP <- case wProcessor w of
           Nothing -> return Nothing
-          Just p  -> fmap Just $ compileWith compileProcessor p
+          Just p  -> do
+            syms <- Compiler $ lift $ asks cfgProcessors
+            fmap Just $ compileSymOrCodeWith compileProcessor p syms
   return $ w {wPreProcessor=mPp, wProcessor=mP}
+
+compileSymOrCodeWith
+  :: (Functor m, Monad m)
+  => (code -> m a) -> SymOrCode code -> SymbolTable code -> m (Compiled a code)
+compileSymOrCodeWith func (SymName name) (SymbolTable syms)
+  = case HM.lookup name syms of
+      Nothing   -> fail ("Unresolved symbol: " ++ name)
+      Just code -> compileWith func code
+compileSymOrCodeWith func (SymCode code) _ = compileWith func code
+
 
 compileProcessor :: ProcessorCode -> Compiler Processor
 compileProcessor (ProcessorCode code)  = compileCode code
@@ -81,8 +88,8 @@ compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
-  sp <- lift $ asks ccSearchPath
-  globalImports <- lift $ asks ccImports
+  sp <- lift $ asks cfgPluginDirs
+  globalImports <- lift $ asks cfgImports
   set [searchPath := sp]
   case spec of
     EvalCode{..} -> do
@@ -104,9 +111,9 @@ compileCode spec = Compiler $ do
 
 compilePlugin
   :: (Typeable t, Typeable b)
-  => String -> t -> InterpreterT (ReaderT CompilerConfig IO) b
+  => String -> t -> InterpreterT (ReaderT SerializableConfig IO) b
 compilePlugin symbol params = do
-  globalImports <- lift $ asks ccImports
+  globalImports <- lift $ asks cfgImports
   setModuleImports $ concat [pluginImports, globalImports]
   let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
                    , "          Right v -> Right (", symbol, " v);     "
@@ -118,7 +125,7 @@ compilePlugin symbol params = do
 
 
 setModuleImports
-  :: [ModuleImport] -> InterpreterT (ReaderT CompilerConfig IO) ()
+  :: [ModuleImport] -> InterpreterT (ReaderT SerializableConfig IO) ()
 setModuleImports = setImportsQ . map unModuleImport
 
 
