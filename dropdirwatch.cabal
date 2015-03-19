@@ -101,6 +101,8 @@ test-suite spec
       exitcode-stdio-1.0
   ghc-options:
       -Wall
+  hs-source-dirs:
+      test src
   main-is:
       Spec.hs
   build-depends:

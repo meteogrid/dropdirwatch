@@ -15,7 +15,6 @@ import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     InterpreterT
   , InterpreterError
-  , ModuleName
   , runInterpreter
   , interpret
   , as
@@ -29,6 +28,7 @@ import Language.Haskell.Interpreter (
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
+  , ModuleImport (..)
   , SerializableConfig
   , SerializableWatcher
   , RunnableConfig
@@ -79,13 +79,13 @@ compileCode spec = Compiler $ do
   sp <- lift $ asks ccSearchPath
   set [searchPath := sp]
   case spec of
-    EvalCode s -> do
-      setImportsQ pluginImports
+    EvalCode s is -> do
+      setModuleImports (pluginImports ++ is)
       interpret s as
     ImportCode m s c -> do
       loadModules [m]
       setTopLevelModules [m]
-      setImportsQ pluginImports
+      setModuleImports pluginImports
       let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
                        , "          Right v -> Right (", s, " v);          "
                        , "          Left e  -> Left e;                     "
@@ -95,16 +95,21 @@ compileCode spec = Compiler $ do
       case eO c of 
         Right o -> return o
         Left e -> fail $ concat ["Error when compiling ", m, ":", s, ": ", e]
-    
-pluginImports :: [(ModuleName, Maybe String)]
+
+setModuleImports
+  :: [ModuleImport] -> InterpreterT (ReaderT CompilerConfig IO) ()
+setModuleImports = setImportsQ . map unModuleImport
+
+
+pluginImports :: [ModuleImport]
 pluginImports = [
-    ("Data.Aeson", Nothing)
-  , ("Data.Aeson.Types", Nothing)
-  , ("System.DirWatch.PluginAPI", Nothing)
-  , ("Data.HashMap.Strict", Nothing)
-  , ("Data.Text", Nothing)
-  , ("Data.ByteString", Nothing)
-  , ("Control.Monad.Trans.Resource", Nothing)
-  , ("Data.Conduit", Nothing)
-  , ("Prelude", Nothing)
+    ModuleImport ("Data.Aeson", Nothing)
+  , ModuleImport ("Data.Aeson.Types", Nothing)
+  , ModuleImport ("System.DirWatch.PluginAPI", Nothing)
+  , ModuleImport ("Data.HashMap.Strict", Nothing)
+  , ModuleImport ("Data.Text", Nothing)
+  , ModuleImport ("Data.ByteString", Nothing)
+  , ModuleImport ("Control.Monad.Trans.Resource", Nothing)
+  , ModuleImport ("Data.Conduit", Nothing)
+  , ModuleImport ("Prelude", Nothing)
   ]

@@ -9,7 +9,9 @@ watchers:
       - /lala
       - /lolo
     preprocessor:
-      eval: yieldFileName . modifyBaseName ("foo_"++)
+      imports:
+        - Prelude as P
+      eval: yieldFileName . modifyBaseName ("foo_" P.++)
   - name: importPlugin
     paths:
       - /lala
@@ -22,6 +24,8 @@ watchers:
       - /lala
       - /lolo
     preprocessor:
+      imports:
+        - Prelude
       eval: \filename ->
               let {
                 foo="bar";
@@ -38,3 +42,14 @@ watchers:
     processor:
       shell:
         - scp $FILENAME $BAR
+  - name: evalNoImports
+    paths:
+      - /lala
+      - /lolo
+    preprocessor:
+      eval: yieldFileName . modifyBaseName ("foo_" ++)
+
+  - name: noPreprocessor
+    paths:
+      - /lala
+      - /lolo

@@ -6,6 +6,7 @@ module System.DirWatch.Config (
   , Watcher (..)
   , Code (..)
   , ProcessorCode (..)
+  , ModuleImport (..)
   , SerializableConfig
   , SerializableWatcher
   , RunnableWatcher
@@ -121,33 +122,55 @@ compileWith f code = fmap (\a -> Compiled (a,code)) (f code)
 instance ToJSON code => ToJSON (Compiled a code) where
   toJSON (Compiled (_,code)) = toJSON code
 
+newtype ModuleImport
+  = ModuleImport {unModuleImport :: (String, Maybe String)}
+  deriving (Show, Eq)
+
+instance ToJSON ModuleImport where
+  toJSON (ModuleImport (m,Nothing)) = toJSON m
+  toJSON (ModuleImport (m,Just qual)) = toJSON $ concat [m, " as ", qual]
+
+instance FromJSON ModuleImport where
+  parseJSON (String s)
+    = case L.splitOn " as " (T.unpack s) of
+        [m,qual] -> return (ModuleImport (m,Just qual))
+        [m]      -> return (ModuleImport (m,Nothing))
+        _ -> fail "\"imports\" should be: module-name [as qualified-name]"
+  parseJSON _ = fail "Expected a string for \"imports\""
+
 data Code
-  = EvalCode   { codeEval   :: String}
+  = EvalCode   { codeEval    :: String
+               , codeImports :: [ModuleImport]}
   | ImportCode { codeModule :: String
                , codeSymbol :: String
                , codeParams :: Object}
   deriving (Show, Eq)
 
 instance ToJSON Code where
-  toJSON (EvalCode s)
-    = object ["eval" .= s]
-  toJSON (ImportCode m s c)
-    = Object (HM.union os c)
+  toJSON EvalCode{..}
+    = object ["eval" .= codeEval, "imports" .= codeImports]
+  toJSON ImportCode{..}
+    = Object (HM.union os codeParams)
     where
-      os = case object ["plugin" .= concat [m, ":", s]] of
+      os = case object ["plugin" .= concat [codeModule, ":", codeSymbol]] of
             Object os' -> os'
             _          -> error "should never happen"
 
 instance FromJSON Code where
-  parseJSON (Object v)
-      = (do c <- v .: "eval"
-            if HM.size v == 1
-              then return $ EvalCode c
-              else fail "\"eval\" expects no arguments")
-    <|> (do i <- v .: "plugin"
-            case L.splitOn ":" i of
-             [m,s] -> return (ImportCode m s (HM.delete "plugin" v))
-             _     -> fail "\"plugin\" should be <module>:<symbol>")
+  parseJSON (Object v) = do
+    mCode <- v .:? "eval"
+    case mCode of
+      Just code -> do
+        imports <- v .:? "imports" .!= []
+        if HM.size v <=2
+          then return $ EvalCode code imports
+          else fail "\"eval\" expects only \"imports\" as an optional arg"
+      Nothing -> do
+        plugin <- v .: "plugin"
+        case L.splitOn ":" plugin of
+          [modname,symbol] ->
+            return (ImportCode modname symbol (HM.delete "plugin" v))
+          _     -> fail "\"plugin\" should be <module>:<symbol>"
   parseJSON _ = fail "Expected an object for \"eval\" or \"plugin\""
 
 data ProcessorCode
