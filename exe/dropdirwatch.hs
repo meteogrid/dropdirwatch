@@ -1,6 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE CPP #-}
 module Main (main) where
 
 import Control.Monad (when, void)
@@ -8,7 +7,7 @@ import Data.Monoid ((<>))
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Data.Text as T (Text, unlines)
+import Data.Text as T (Text, pack, unlines, lines)
 import System.DirWatch
 import System.Environment (getArgs)
 import System.Exit(exitFailure)
@@ -49,9 +48,7 @@ main = do
             removeWatches = readIORef oldWatches >>= mapM_ removeWatch
             signalReload = endLoop stopCond >> watchConfig ino
         removeWatches
-#if !(DYNAMIC_LINKING && COMPILE_PLUGINS)
         takeMVar pluginDirs >>= mapM watchDir >>= writeIORef oldWatches
-#endif
         whenM (readIORef doWatchConfig) $ do
           writeIORef doWatchConfig False
           void $ addWatch ino [MoveIn,Modify,OneShot] configFile $
@@ -79,6 +76,7 @@ decodeAndCompile fname = do
       eRet <- compileConfig pConfig
       case eRet of
         Right c -> return (Right c)
-        Left es -> return (Left ("Error when compiling config:":es))
+        Left es -> return . Left $
+          ["Error when compiling config:\n"] ++ T.lines (T.pack (show es))
     Left e        -> return . Left $
                        [fromStrings ["Could not parse YAML: ", show e]]

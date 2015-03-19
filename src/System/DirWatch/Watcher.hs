@@ -86,6 +86,7 @@ import System.DirWatch.Logging (
     LoggingT
   , MonadLogger
   , runStderrLoggingT
+  , logDebug
   , logInfo
   , logError
   , logWarn
@@ -333,7 +334,7 @@ runWatchersOnFile watchers filename = do
 
 processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
 processWatcher now abspath Watcher{..} = do
-  $(logInfo) $ fromStrings ["Running ", wName, " on ", show abspath]
+  $(logDebug) $ fromStrings ["Running \"", wName, "\" on ", show abspath]
   case wProcessor of
     Just compiled  -> do
       let preprocessor = maybe yieldFilePath getCompiled wPreProcessor
@@ -342,7 +343,7 @@ processWatcher now abspath Watcher{..} = do
           source       = sourceFile filepath
           filepath     = toFilePath abspath
       preprocess >>= mapM_ process
-      $(logInfo) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
+      $(logDebug) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
     Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 
 

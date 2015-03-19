@@ -29,20 +29,6 @@ flag old-locale
                If true then depend on time < 1.5 together with old-locale.
   default: False
 
-
-Flag CompilePlugins
-  Description: Enable compiled plugins.
-               WARNING: If DynamicLinking is also enabled plugins won't be
-               properly reloaded when they're modfied. This is probably related
-               to https://ghc.haskell.org/trac/ghc/ticket/8238
-  Default:     False
-
-Flag DynamicLinking
-  Description: Enable DynamicLinking of executables. Will also need to have all
-               dependencies compiled as with "-shared".
-               Recommended because https://ghc.haskell.org/trac/ghc/ticket/9314.
-  Default:     False
-
 source-repository head
   type:              git
   location:          https://github.com/meteogrid/dropdirwatch
@@ -56,7 +42,6 @@ library
                      , System.DirWatch.ShellEnv
                      , System.DirWatch.Logging
                      , System.DirWatch.Interpreter
-                     , System.DirWatch.Compiler
                      , System.DirWatch.Threading
                      , System.DirWatch.Watcher
                      , System.DirWatch.Util
@@ -89,8 +74,6 @@ library
                      , conduit
                      , conduit-extra
                      , resourcet
-                     , ghc
-                     , ghc-paths
                      , temporary
                      , hashable
                      , unix
@@ -106,20 +89,12 @@ library
       -Wall
       -fwarn-incomplete-patterns
       -fwarn-incomplete-uni-patterns
-  if flag(CompilePlugins)
-    CPP-Options: -DCOMPILE_PLUGINS
-  if flag(DynamicLinking)
-    CPP-Options: -DDYNAMIC_LINKING
 
 test-suite spec
   type:
       exitcode-stdio-1.0
   ghc-options:
       -Wall
-  if flag(DynamicLinking)
-    ghc-options: -dynamic
-  hs-source-dirs:
-      test src
   main-is:
       Spec.hs
   build-depends:
@@ -152,8 +127,6 @@ test-suite spec
     , conduit
     , conduit-extra
     , resourcet
-    , ghc
-    , ghc-paths
     , temporary
     , hashable
     , unix
@@ -166,8 +139,6 @@ test-suite spec
 executable dropdirwatch
   ghc-options:
       -Wall -threaded -rtsopts
-  if flag(DynamicLinking)
-    ghc-options: -dynamic
   hs-source-dirs:
       exe
   main-is:
@@ -179,7 +150,3 @@ executable dropdirwatch
     , hinotify
     , text
   default-language:    Haskell2010
-  if flag(CompilePlugins)
-    CPP-Options: -DCOMPILE_PLUGINS
-  if flag(DynamicLinking)
-    CPP-Options: -DDYNAMIC_LINKING

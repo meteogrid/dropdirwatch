@@ -1,5 +1,4 @@
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module System.DirWatch.Interpreter (
@@ -12,11 +11,21 @@ module System.DirWatch.Interpreter (
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
-import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
-import Control.Monad.IO.Class(liftIO)
-import Data.Monoid ((<>))
 import Data.Typeable (Typeable)
-import Data.Text (Text, pack)
+import Language.Haskell.Interpreter (
+    InterpreterT
+  , InterpreterError
+  , ModuleName
+  , runInterpreter
+  , interpret
+  , as
+  , setImportsQ
+  , loadModules
+  , setTopLevelModules
+  , set
+  , searchPath
+  , OptionVal ((:=))
+  )
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
@@ -29,8 +38,6 @@ import System.DirWatch.Config (
   , compileWith
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
-import System.DirWatch.Compiler (EvalEnv(..), interpret)
-import Data.Default (def)
 
 data CompilerConfig
   = CompilerConfig {
@@ -39,19 +46,18 @@ data CompilerConfig
 
 newtype Compiler a
   = Compiler {
-      unCompiler :: ExceptT [Text] (ReaderT CompilerConfig IO) a
+      unCompiler :: InterpreterT (ReaderT CompilerConfig IO) a
   } deriving (Functor, Applicative, Monad)
 
 compileConfig
-  :: SerializableConfig -> IO (Either [Text] RunnableConfig)
+  :: SerializableConfig -> IO (Either InterpreterError RunnableConfig)
 compileConfig c = runCompiler cConfig $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
-  where
-    cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
+  where cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
 
-runCompiler :: CompilerConfig -> Compiler a -> IO (Either [Text] a)
-runCompiler c = flip runReaderT c . runExceptT . unCompiler
+runCompiler :: CompilerConfig -> Compiler a -> IO (Either InterpreterError a)
+runCompiler c = flip runReaderT c . runInterpreter . unCompiler
 
 
 compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
@@ -71,27 +77,26 @@ compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
   sp <- lift $ asks ccSearchPath
-  let env = def {envImports=map fst pluginImports, envSearchPath=sp}
-  eRet <- liftIO $ case spec of
-    EvalCode s ->
-      interpret env s
+  set [searchPath := sp]
+  case spec of
+    EvalCode s -> do
+      setImportsQ pluginImports
+      interpret s as
     ImportCode m s c -> do
-      let env' = env {envTargets=[m]}
-          cmd = concat ["\\c -> case parseEither parseJSON (Object c) of {"
-                , "          Right v -> Right (", s, " v);"
-                , "          Left e  -> Left e;"
-                , "          }"
-                ]
-      eOut <- interpret env' cmd
-      return $ case eOut of
-        Right eO ->
-          case eO c of 
-            Right o -> Right o
-            Left e -> Left $ ["When parsing plugin arguments: " <> pack e]
-        Left es -> Left es
-  either throwE return eRet
+      loadModules [m]
+      setTopLevelModules [m]
+      setImportsQ pluginImports
+      let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
+                       , "          Right v -> Right (", s, " v);          "
+                       , "          Left e  -> Left e;                     "
+                       , "          }                                      "
+                       ]
+      eO <- interpret cmd as
+      case eO c of 
+        Right o -> return o
+        Left e -> fail $ concat ["Error when compiling ", m, ":", s, ": ", e]
     
-pluginImports :: [(String, Maybe String)]
+pluginImports :: [(ModuleName, Maybe String)]
 pluginImports = [
     ("Data.Aeson", Nothing)
   , ("Data.Aeson.Types", Nothing)
