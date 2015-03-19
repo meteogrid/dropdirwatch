@@ -18,6 +18,7 @@ module System.DirWatch.Processor (
   , shellCmd
   , executeShellCmd
   , shellProcessor
+  , getWorkSpace
   , createProcess
   , waitForProcess
   , forkChild
@@ -72,6 +73,7 @@ import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
 import qualified System.DirWatch.Threading as Th
 import System.Exit (ExitCode(..))
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process (
     CreateProcess(..)
   , ProcessHandle
@@ -96,9 +98,10 @@ data ProcessorConfig
 
 data ProcessorEnv
   = ProcessorEnv {
-      pConfig   :: ProcessorConfig
-    , pProcs    :: IORef [ProcessHandle]
-    , pThreads  :: IORef [SomeThreadHandle ProcessorError]
+      pConfig    :: ProcessorConfig
+    , pProcs     :: IORef [ProcessHandle]
+    , pThreads   :: IORef [SomeThreadHandle ProcessorError]
+    , pWorkSpace :: FilePath
     }
 
 
@@ -143,9 +146,11 @@ instance MonadBaseControl IO ProcessorM where
 
 runProcessorM
   :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
-runProcessorM cfg act = do
-  env <- ProcessorEnv <$> pure cfg <*> newIORef [] <*> newIORef []
-  finally (runProcessorEnv env act) (cleanup env)
+runProcessorM cfg act
+  = withSystemTempDirectory ".dropdirwatch-processor" $ \workSpace -> do
+      env <- ProcessorEnv <$> pure cfg <*> newIORef [] <*> newIORef []
+                          <*> pure workSpace
+      finally (runProcessorEnv env act) (cleanup env)
   where
     cleanup env = finally
       (readIORef (pThreads env) >>= mapM_ killThread)
@@ -221,13 +226,23 @@ executeShellCmd ShellCmd{..} = do
     ExitFailure c -> throwE (ShellError c out err)
 
 
+-- | Execute several shell commands.
+--   NOTE: Only the first command will get the contents piped into it
 shellProcessor :: [String] -> Processor
-shellProcessor cmds filename content
-  = let env  = envSet "FILENAME" filename mempty
-        sh s = executeShellCmd $ (shellCmd s) {shInput=Just content, shEnv=env}
-    in mapM_ sh cmds
+shellProcessor [] _ _ = return ()
+shellProcessor (x:xs) filename content = do
+  workSpace <- getWorkSpace
+  let env  = envSet "FILENAME" filename
+           . envSet "WORKSPACE" workSpace
+           $ mempty
+  void $ executeShellCmd $ (shellCmd x) {shInput=Just content, shEnv=env}
+  mapM_ (\s -> executeShellCmd $ (shellCmd s) {shEnv=env}) xs
 
-forkChild :: ProcessorM a -> ProcessorM (ThreadHandle (Either ProcessorError a))
+getWorkSpace :: ProcessorM FilePath
+getWorkSpace = ProcessorM (asks pWorkSpace)
+
+forkChild
+  :: ProcessorM a -> ProcessorM (ThreadHandle (Either ProcessorError a))
 forkChild act = do
   env <- ProcessorM ask
   ret <- liftIO $ Th.forkChild (runProcessorEnv env act)
