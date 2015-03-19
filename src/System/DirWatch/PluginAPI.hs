@@ -2,7 +2,7 @@
 {-# LANGUAGE Trustworthy #-}
 module System.DirWatch.PluginAPI (
     modifyBaseName
-  , yieldModifiedBaseName
+  , yieldFileName
   , toLazyBytesStringC
   , toStrictByteStringC
   , formatTime
@@ -21,11 +21,13 @@ import Data.Aeson as API (
   , (.:?)
   , (.!=)
   )
-import Data.Conduit as API (Conduit, (=$=), ($$), await, yield)
+import Data.Conduit as API (Conduit, Source, (=$=), ($$), await, yield)
 import System.FilePath.Posix as API
 import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
 import System.DirWatch.ShellEnv as API (envSet, envAppend)
+import Data.ByteString as API (ByteString)
+
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
 
@@ -36,11 +38,11 @@ import System.Locale (defaultTimeLocale)
 #endif
 import qualified Data.Time.Format as F (FormatTime, formatTime)
 
-modifyBaseName :: FilePath -> (FilePath -> FilePath) -> FilePath
-modifyBaseName fpath func = replaceBaseName fpath (func (takeBaseName fpath))
+modifyBaseName :: (FilePath -> FilePath) -> FilePath -> FilePath
+modifyBaseName func fpath = replaceBaseName fpath (func (takeBaseName fpath))
 
-yieldModifiedBaseName :: Monad m => (FilePath -> FilePath) -> PreProcessor m
-yieldModifiedBaseName func = yieldFilePath . flip modifyBaseName func
+yieldFileName  :: Monad m => PreProcessor m
+yieldFileName = yieldFilePath . takeFileName
 
 toLazyBytesStringC
   :: MonadResource m => Conduit BS.ByteString m LBS.ByteString
