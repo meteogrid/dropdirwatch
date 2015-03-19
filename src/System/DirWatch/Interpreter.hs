@@ -77,7 +77,7 @@ compileSymOrCodeWith
   => (code -> m a) -> SymOrCode code -> SymbolTable code -> m (Compiled a code)
 compileSymOrCodeWith func (SymName name) (SymbolTable syms)
   = case HM.lookup name syms of
-      Nothing   -> fail ("Unresolved symbol: " ++ name)
+      Nothing   -> error ("Unresolved symbol: " ++ name) --FIXME
       Just code -> compileWith func code
 compileSymOrCodeWith func (SymCode code) _ = compileWith func code
 
@@ -93,11 +93,12 @@ compileCode spec = Compiler $ do
   set [searchPath := sp]
   case spec of
     EvalCode{..} -> do
-      setModuleImports $ concat [pluginImports, globalImports, codeImports]
+      setModuleImports $ concat [evalImports, globalImports, codeImports]
       interpret codeEval as
     InterpretedPlugin{..} -> do
       loadModules [codeModule]
       setTopLevelModules [codeModule]
+      setModuleImports $ concat [pluginImports, globalImports]
       ePlugin <- compilePlugin codeSymbol codeParams
       case ePlugin of 
         Right o -> return o
@@ -105,6 +106,7 @@ compileCode spec = Compiler $ do
                                 , codeSymbol, ": ", e]
     LoadedPlugin{..} -> do
       ePlugin <- compilePlugin codeSymbol codeParams
+      setModuleImports $ concat [globalImports]
       case ePlugin of 
         Right o -> return o
         Left e -> fail $ concat ["Error when compiling ", codeSymbol, ": ", e]
@@ -113,8 +115,6 @@ compilePlugin
   :: (Typeable t, Typeable b)
   => String -> t -> InterpreterT (ReaderT SerializableConfig IO) b
 compilePlugin symbol params = do
-  globalImports <- lift $ asks cfgImports
-  setModuleImports $ concat [pluginImports, globalImports]
   let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
                    , "          Right v -> Right (", symbol, " v);     "
                    , "          Left e  -> Left e;                     "
@@ -138,6 +138,12 @@ pluginImports = [
   , ModuleImport ("Data.Text", Nothing)
   , ModuleImport ("Data.ByteString", Nothing)
   , ModuleImport ("Control.Monad.Trans.Resource", Nothing)
+  , ModuleImport ("Data.Conduit", Nothing)
+  , ModuleImport ("Prelude", Nothing)
+  ]
+evalImports :: [ModuleImport]
+evalImports = [
+    ModuleImport ("System.DirWatch.PluginAPI", Nothing)
   , ModuleImport ("Data.Conduit", Nothing)
   , ModuleImport ("Prelude", Nothing)
   ]
