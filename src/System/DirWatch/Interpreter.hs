@@ -59,10 +59,8 @@ compileWatcher w = do
   mPp <- case wPreProcessor w of
           Nothing -> return Nothing
           Just p  -> fmap Just $ compileWith compileCode p
-  mP <- case wProcessor w of
-          Nothing -> return Nothing
-          Just p  -> fmap Just $ compileWith compileProcessor p
-  return $ w {wPreProcessor=mPp, wProcessor=mP}
+  ps <- mapM (compileWith compileProcessor) (wProcessors w)
+  return $ w {wPreProcessor=mPp, wProcessors=ps}
 
 compileProcessor :: ProcessorCode -> Compiler Processor
 compileProcessor (ProcessorCode code)  = compileCode code

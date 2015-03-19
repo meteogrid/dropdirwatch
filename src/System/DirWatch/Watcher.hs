@@ -325,16 +325,13 @@ runWatcherOnFile wch filename = do
 processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
 processWatcher now abspath Watcher{..} = do
   $(logInfo) $ fromStrings ["Running ", wName, " on ", show abspath]
-  case wProcessor of
-    Just compiled  -> do
-      let preprocessor = maybe yieldFilePath getCompiled wPreProcessor
-          preprocess   = runPreProcessor source now (preprocessor filepath)
-          process      = uncurry $ getCompiled compiled
-          source       = sourceFile filepath
-          filepath     = toFilePath abspath
-      preprocess >>= mapM_ process
-      $(logInfo) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
-    Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
+  let preprocessor = maybe yieldFilePath getCompiled wPreProcessor
+      preprocess   = runPreProcessor source now (preprocessor filepath)
+      source       = sourceFile filepath
+      filepath     = toFilePath abspath
+  forM_ wProcessors $ \processor -> do
+      preprocess >>= mapM_ (uncurry (getCompiled processor))
+  $(logInfo) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
 
 
 processorConfig :: WatcherM ProcessorConfig
