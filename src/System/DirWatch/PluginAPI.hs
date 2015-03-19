@@ -2,6 +2,7 @@
 {-# LANGUAGE Trustworthy #-}
 module System.DirWatch.PluginAPI (
     NoArgs
+  , noArgs
   , modifyBaseName
   , yieldFileName
   , toLazyBytesStringC
@@ -75,9 +76,12 @@ formattedCurrentTime :: Monad m => String -> PreProcessorT m String
 formattedCurrentTime fmt = liftM (formatTime fmt) getTime
 
 newtype NoArgs = NoArgs ()
+
 instance FromJSON NoArgs where
   parseJSON (Object v)
     | HM.size v == 0 = return (NoArgs ())
     | otherwise      = fail "Expected no args for plugin"
   parseJSON _        = fail "Expected an objects as args"
 
+noArgs :: NoArgs
+noArgs = NoArgs ()

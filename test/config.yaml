@@ -1,5 +1,7 @@
 pluginDirs:
   - test/plugins
+imports:
+  - Data.List as L
 env:
   +PATH: /opt/foo 
   FOO: bar
@@ -11,7 +13,7 @@ watchers:
     preprocessor:
       imports:
         - Prelude as P
-      eval: yieldFileName . modifyBaseName ("foo_" P.++)
+      eval: yieldFileName . L.intersperse '-' . modifyBaseName ("foo_" P.++)
   - name: importPlugin
     paths:
       - /lala

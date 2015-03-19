@@ -42,6 +42,7 @@ import System.DirWatch.Processor (Processor, shellProcessor)
 data CompilerConfig
   = CompilerConfig {
       ccSearchPath :: [FilePath]
+    , ccImports    :: [ModuleImport]
   }
 
 newtype Compiler a
@@ -54,7 +55,11 @@ compileConfig
 compileConfig c = runCompiler cConfig $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
-  where cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
+  where
+    cConfig = CompilerConfig {
+        ccSearchPath = cfgPluginDirs c
+      , ccImports    = cfgImports c
+      }
 
 runCompiler :: CompilerConfig -> Compiler a -> IO (Either InterpreterError a)
 runCompiler c = flip runReaderT c . runInterpreter . unCompiler
@@ -77,24 +82,26 @@ compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 compileCode :: forall a. Typeable a => Code -> Compiler a
 compileCode spec = Compiler $ do
   sp <- lift $ asks ccSearchPath
+  globalImports <- lift $ asks ccImports
   set [searchPath := sp]
   case spec of
-    EvalCode s is -> do
-      setModuleImports (pluginImports ++ is)
-      interpret s as
-    ImportCode m s c -> do
-      loadModules [m]
-      setTopLevelModules [m]
-      setModuleImports pluginImports
+    EvalCode{..} -> do
+      setModuleImports $ concat [pluginImports, globalImports, codeImports]
+      interpret codeEval as
+    ImportCode{..} -> do
+      loadModules [codeModule]
+      setTopLevelModules [codeModule]
+      setModuleImports $ concat [pluginImports, globalImports]
       let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
-                       , "          Right v -> Right (", s, " v);          "
+                       , "          Right v -> Right (", codeSymbol, " v); "
                        , "          Left e  -> Left e;                     "
                        , "          }                                      "
                        ]
       eO <- interpret cmd as
-      case eO c of 
+      case eO codeParams of 
         Right o -> return o
-        Left e -> fail $ concat ["Error when compiling ", m, ":", s, ": ", e]
+        Left e -> fail $ concat ["Error when compiling ", codeModule, ":"
+                                , codeSymbol, ": ", e]
 
 setModuleImports
   :: [ModuleImport] -> InterpreterT (ReaderT CompilerConfig IO) ()

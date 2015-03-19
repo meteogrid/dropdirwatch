@@ -43,6 +43,7 @@ data Config w
     , cfgShellEnv    :: ShellEnv
     , cfgWatchers    :: [w]
     , cfgWaitSeconds :: Int
+    , cfgImports     :: [ModuleImport]
   } deriving Show
 
 type SerializableConfig = Config SerializableWatcher
@@ -60,6 +61,7 @@ instance ToJSON SerializableConfig where
     , "pluginDirs"  .= cfgPluginDirs
     , "watchers"    .= cfgWatchers
     , "waitSeconds" .= cfgWaitSeconds
+    , "imports"     .= cfgImports
     ]
 
 instance FromJSON SerializableConfig where
@@ -69,7 +71,8 @@ instance FromJSON SerializableConfig where
       v .:? "archiveDir" <*>
       v .:? "env" .!= mempty <*>
       v .:  "watchers" <*>
-      v .:? "waitSeconds" .!= 60
+      v .:? "waitSeconds" .!= 60 <*>
+      v .:? "imports" .!= []
   parseJSON _ = fail "Expected an object for \"config\""
 
 
