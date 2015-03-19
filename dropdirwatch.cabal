@@ -29,6 +29,12 @@ flag old-locale
                If true then depend on time < 1.5 together with old-locale.
   default: False
 
+flag reload-config
+  description: Reload config when it changes. Disabled because we leak
+               memory when we re-compile. 
+  default: False
+
+
 source-repository head
   type:              git
   location:          https://github.com/meteogrid/dropdirwatch
@@ -150,3 +156,5 @@ executable dropdirwatch
     , hinotify
     , text
   default-language:    Haskell2010
+  if flag(reload-config)
+    CPP-Options: -DRELOAD_CONFIG

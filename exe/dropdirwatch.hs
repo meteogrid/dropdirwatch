@@ -1,11 +1,12 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 module Main (main) where
 
 import Control.Monad (when, void)
 import Data.Monoid ((<>))
 import Control.Monad.IO.Class (MonadIO(liftIO))
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text as T (Text, pack, unlines, lines)
 import System.DirWatch
@@ -23,44 +24,58 @@ main = do
             _       -> error $ "Invalid args: " ++ show args
   stopCond <- mkStopCond
   pluginDirs <- newEmptyMVar
-  oldWatches <- newIORef []
-  doWatchConfig <- newIORef True
   let mainLoop initialConfig initialState = do
         newState <- liftIO $
                       runWatchLoop initialConfig initialState stopCond
         eNewConfig <- liftIO $ decodeAndCompile configFile
         case eNewConfig of
           Right newConfig -> do
-            liftIO $ putMVar pluginDirs (cfgPluginDirs newConfig)
+            watchNewPluginDirs pluginDirs newConfig
             mainLoop newConfig (Just newState)
           Left e -> do 
             logCompileError e
             $(logInfo) "Will continue with last valid version"
-            liftIO $ putMVar pluginDirs (cfgPluginDirs initialConfig)
+            watchNewPluginDirs pluginDirs initialConfig
             mainLoop initialConfig (Just newState)
-      watchConfig ino = do
-        let watchDir d = addWatch ino [CloseWrite] d handleEv
-            handleEv Closed{ isDirectory   = False
-                           , maybeFilePath = Just f
-                           , wasWriteable  = True}
-              | take 2 (reverse f) == reverse "hs" = signalReload
-            handleEv _ = return ()
-            removeWatches = readIORef oldWatches >>= mapM_ removeWatch
-            signalReload = endLoop stopCond >> watchConfig ino
+
+  eConfig <- decodeAndCompile configFile
+  case eConfig of
+    Right initialConfig -> withINotify $ \ino -> do
+      watchNewPluginDirs pluginDirs initialConfig
+      watchConfig configFile stopCond pluginDirs ino
+      runStderrLoggingT $ mainLoop initialConfig Nothing
+    Left err -> runStderrLoggingT (logCompileError err) >> exitFailure
+
+watchNewPluginDirs
+  :: MonadIO m => MVar [FilePath] -> Config w -> m ()
+watchConfig
+  :: FilePath -> StopCond -> MVar [FilePath] -> INotify -> IO ()
+
+#if RELOAD_CONFIG
+watchNewPluginDirs pluginDirs = liftIO . putMVar pluginDirs . cfgPluginDirs
+watchConfig configFile stopCond pluginDirs ino = do
+  oldWatches <- newIORef []
+  doWatchConfig <- newIORef True
+  let watchDir d = addWatch ino [CloseWrite] d handleEv
+      handleEv Closed{ isDirectory   = False
+                     , maybeFilePath = Just f
+                     , wasWriteable  = True}
+        | take 2 (reverse f) == reverse "hs" = signalReload
+      handleEv _ = return ()
+      removeWatches = readIORef oldWatches >>= mapM_ removeWatch
+      signalReload = endLoop stopCond >> loop
+      loop = do
         removeWatches
         takeMVar pluginDirs >>= mapM watchDir >>= writeIORef oldWatches
         whenM (readIORef doWatchConfig) $ do
           writeIORef doWatchConfig False
           void $ addWatch ino [MoveIn,Modify,OneShot] configFile $
             const (writeIORef doWatchConfig True >> signalReload)
-
-  eConfig <- decodeAndCompile configFile
-  case eConfig of
-    Right initialConfig -> withINotify $ \ino -> do
-      putMVar pluginDirs (cfgPluginDirs initialConfig)
-      watchConfig ino
-      runStderrLoggingT $ mainLoop initialConfig Nothing
-    Left err -> runStderrLoggingT (logCompileError err) >> exitFailure
+  loop
+#else
+watchNewPluginDirs _ _ = return ()
+watchConfig _ _ _ _    = return ()
+#endif
 
 whenM :: Monad m => m Bool -> m () -> m ()
 whenM cond act = cond >>= flip when act
