@@ -142,17 +142,25 @@ instance FromJSON ModuleImport where
   parseJSON _ = fail "Expected a string for \"imports\""
 
 data Code
-  = EvalCode   { codeEval    :: String
-               , codeImports :: [ModuleImport]}
-  | ImportCode { codeModule :: String
-               , codeSymbol :: String
-               , codeParams :: Object}
+  = EvalCode          { codeEval    :: String
+                      , codeImports :: [ModuleImport]}
+  | InterpretedPlugin { codeModule :: String
+                      , codeSymbol :: String
+                      , codeParams :: Object}
+  | LoadedPlugin      { codeSymbol :: String
+                      , codeParams :: Object}
   deriving (Show, Eq)
 
 instance ToJSON Code where
   toJSON EvalCode{..}
     = object ["eval" .= codeEval, "imports" .= codeImports]
-  toJSON ImportCode{..}
+  toJSON LoadedPlugin{..}
+    = Object (HM.union os codeParams)
+    where
+      os = case object ["plugin" .= codeSymbol] of
+            Object os' -> os'
+            _          -> error "should never happen"
+  toJSON InterpretedPlugin{..}
     = Object (HM.union os codeParams)
     where
       os = case object ["plugin" .= concat [codeModule, ":", codeSymbol]] of
@@ -172,7 +180,9 @@ instance FromJSON Code where
         plugin <- v .: "plugin"
         case L.splitOn ":" plugin of
           [modname,symbol] ->
-            return (ImportCode modname symbol (HM.delete "plugin" v))
+            return (InterpretedPlugin modname symbol (HM.delete "plugin" v))
+          [symbol] ->
+            return (LoadedPlugin symbol (HM.delete "plugin" v))
           _     -> fail "\"plugin\" should be <module>:<symbol>"
   parseJSON _ = fail "Expected an object for \"eval\" or \"plugin\""
 

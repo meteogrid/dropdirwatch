@@ -88,20 +88,34 @@ compileCode spec = Compiler $ do
     EvalCode{..} -> do
       setModuleImports $ concat [pluginImports, globalImports, codeImports]
       interpret codeEval as
-    ImportCode{..} -> do
+    InterpretedPlugin{..} -> do
       loadModules [codeModule]
       setTopLevelModules [codeModule]
-      setModuleImports $ concat [pluginImports, globalImports]
-      let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
-                       , "          Right v -> Right (", codeSymbol, " v); "
-                       , "          Left e  -> Left e;                     "
-                       , "          }                                      "
-                       ]
-      eO <- interpret cmd as
-      case eO codeParams of 
+      ePlugin <- compilePlugin codeSymbol codeParams
+      case ePlugin of 
         Right o -> return o
         Left e -> fail $ concat ["Error when compiling ", codeModule, ":"
                                 , codeSymbol, ": ", e]
+    LoadedPlugin{..} -> do
+      ePlugin <- compilePlugin codeSymbol codeParams
+      case ePlugin of 
+        Right o -> return o
+        Left e -> fail $ concat ["Error when compiling ", codeSymbol, ": ", e]
+
+compilePlugin
+  :: (Typeable t, Typeable b)
+  => String -> t -> InterpreterT (ReaderT CompilerConfig IO) b
+compilePlugin symbol params = do
+  globalImports <- lift $ asks ccImports
+  setModuleImports $ concat [pluginImports, globalImports]
+  let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
+                   , "          Right v -> Right (", symbol, " v);     "
+                   , "          Left e  -> Left e;                     "
+                   , "          }                                      "
+                   ]
+  ePartialPlugin <- interpret cmd as
+  return (ePartialPlugin params)
+
 
 setModuleImports
   :: [ModuleImport] -> InterpreterT (ReaderT CompilerConfig IO) ()
