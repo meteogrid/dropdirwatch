@@ -69,7 +69,7 @@ instance FromJSON SerializableConfig where
       v .:? "env" .!= mempty <*>
       v .:  "watchers" <*>
       v .:? "waitSeconds" .!= 60
-  parseJSON _ = fail "Expected an object"
+  parseJSON _ = fail "Expected an object for \"config\""
 
 
 
@@ -103,7 +103,7 @@ instance FromJSON SerializableWatcher where
       v .:?  "processors" .!= []
     where expectedKeys = ["name", "paths", "preprocessor", "processors"]
           unexpectedKeys = filter (`notElem` expectedKeys) $ HM.keys v
-  parseJSON _ = fail "Expected an object"
+  parseJSON _ = fail "Expected an object for \"watcher\""
 
 newtype Compiled a code = Compiled (a, code)
 getCompiled :: Compiled a code -> a
@@ -148,7 +148,7 @@ instance FromJSON Code where
             case L.splitOn ":" i of
              [m,s] -> return (ImportCode m s (HM.delete "plugin" v))
              _     -> fail "\"plugin\" should be <module>:<symbol>")
-  parseJSON _ = fail "Expected an object"
+  parseJSON _ = fail "Expected an object for \"eval\" or \"plugin\""
 
 data ProcessorCode
   = ProcessorCode  Code
@@ -162,4 +162,4 @@ instance ToJSON ProcessorCode where
 instance FromJSON ProcessorCode where
   parseJSON o@(Object v)
     = (ProcessorShell <$> v .: "shell") <|> (ProcessorCode <$> parseJSON o)
-  parseJSON _ = fail "Expected an object"
+  parseJSON _ = fail "Expected an object for \"eval\", \"shell\" or \"plugin\""

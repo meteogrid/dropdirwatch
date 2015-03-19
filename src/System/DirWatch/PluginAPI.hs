@@ -1,7 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE Trustworthy #-}
 module System.DirWatch.PluginAPI (
-    modifyBaseName
+    NoArgs
+  , modifyBaseName
   , yieldFileName
   , toLazyBytesStringC
   , toStrictByteStringC
@@ -22,6 +23,7 @@ import Data.Aeson as API (
   , (.!=)
   )
 import Data.Conduit as API (Conduit, Source, (=$=), ($$), await, yield)
+import qualified Data.HashMap.Strict as HM
 import System.FilePath.Posix as API
 import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
@@ -71,3 +73,11 @@ formatTime = F.formatTime defaultTimeLocale
 
 formattedCurrentTime :: Monad m => String -> PreProcessorT m String
 formattedCurrentTime fmt = liftM (formatTime fmt) getTime
+
+newtype NoArgs = NoArgs ()
+instance FromJSON NoArgs where
+  parseJSON (Object v)
+    | HM.size v == 0 = return (NoArgs ())
+    | otherwise      = fail "Expected no args for plugin"
+  parseJSON _        = fail "Expected an objects as args"
+
