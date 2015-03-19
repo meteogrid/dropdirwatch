@@ -50,8 +50,7 @@ import System.INotify (
   , addWatch
   )
 import System.Directory (createDirectoryIfMissing, renameFile, doesFileExist)
-import System.FilePath.GlobPattern ((~~))
-import System.FilePath.Posix (joinPath, takeDirectory, normalise)
+import System.FilePath.Posix (takeDirectory)
 import System.IO.Error (tryIOError)
 import System.DirWatch.Config (
     RunnableConfig
@@ -60,7 +59,14 @@ import System.DirWatch.Config (
   , Watcher(..)
   , getCompiled
   )
-import System.DirWatch.Util (takePatternDirectory, archiveDestination)
+import System.DirWatch.Util (
+    AbsPath
+  , joinAbsPath
+  , globMatch
+  , takePatternDirectory
+  , archiveDestination
+  , toFilePath
+  )
 
 import System.DirWatch.Threading (
     SomeThreadHandle
@@ -87,7 +93,7 @@ import System.DirWatch.Processor (
 import System.DirWatch.PreProcessor (runPreProcessor, yieldFilePath)
 
 type StopCond = MVar ()
-type ThreadMap = HashMap FilePath [FileProcessor]
+type ThreadMap = HashMap AbsPath [FileProcessor]
 
 data FileProcessor
   = FileProcessor {
@@ -100,7 +106,7 @@ watchedEvents :: [EventVariety]
 watchedEvents = [MoveIn, CloseWrite]
 
 data ChanMessage
-  = Work RunnableWatcher FilePath
+  = Work RunnableWatcher AbsPath
   | WakeUp
   | Finish
   deriving Show
@@ -146,7 +152,7 @@ instance MonadBaseControl IO WatcherM where
      state <- get
      liftIO $ f (runWatcherEnv env state)
    restoreM (a, state) = put state >> return a
-        
+
 runWatcherEnv
   :: WatcherEnv -> WatcherState -> WatcherM a -> IO (a, WatcherState)
 runWatcherEnv env state
@@ -178,25 +184,25 @@ setupWatches = do
   forM_ watchers $ \watcher -> do
     forM_ (wPaths watcher) $ \globPattern -> do
       let baseDir  = takePatternDirectory globPattern
-          absPath p = joinPath [baseDir, p]
+          absPath p = joinAbsPath baseDir [p]
           name = wName watcher
       mError <- addIWatch baseDir $ \event -> do
         case event of
-          MovedIn{..} | absPath filePath ~~ globPattern
+          MovedIn{..} | absPath filePath `globMatch` globPattern
                       , not isDirectory ->
             writeChan chan $ Work watcher (absPath filePath)
           Closed{..} | wasWriteable, not isDirectory ->
             case maybeFilePath of
-              Just filePath | absPath filePath ~~ globPattern ->
+              Just filePath | absPath filePath `globMatch` globPattern ->
                 writeChan chan $ Work watcher (absPath filePath)
               _ -> return ()
           _ -> return ()
       case mError of
         Just e ->
-          $(logWarn) $ fromStrings ["Could not watch ", baseDir, " for "
+          $(logWarn) $ fromStrings ["Could not watch ", show baseDir, " for "
                                    , name, ": ", show e]
         Nothing ->
-          $(logInfo) $ fromStrings ["Watching ", baseDir, " for ", name]
+          $(logInfo) $ fromStrings ["Watching ", show baseDir, " for ", name]
 
 loop :: WatcherM ()
 loop = do
@@ -205,16 +211,16 @@ loop = do
   msg <- getMessage
   case msg of
     Work wch file -> do
-      $(logInfo) $ fromStrings ["File ", file, " arrived"]
+      $(logInfo) $ fromStrings ["File ", show file, " arrived"]
       runWatcherOnFile wch file
       loop
     WakeUp        -> loop
     Finish        -> return ()
 
-addIWatch :: FilePath -> (Event -> IO ()) -> WatcherM (Maybe IOError)
+addIWatch :: AbsPath -> (Event -> IO ()) -> WatcherM (Maybe IOError)
 addIWatch dir wch = do
   ino <- asks wInotify
-  result <- liftIO . try $ addWatch ino watchedEvents dir wch
+  result <- liftIO . try $ addWatch ino watchedEvents (toFilePath dir) wch
   either (return . Just) (const (return Nothing)) result
 
 
@@ -235,45 +241,45 @@ handleFinishedFiles = do
           registerFailure fname (fpWatcher fp) err >> return Nothing
     if null remainingPs
       then do
-        $(logInfo) $ fromStrings ["Finished processing ", fname]
+        $(logInfo) $ fromStrings ["Finished processing ", show fname]
         archiveFile fname
         return Nothing
       else return (Just (fname, remainingPs))
   put state {wThreads=HM.fromList remaining}
 
-archiveFile :: FilePath -> WatcherM ()
+archiveFile :: AbsPath -> WatcherM ()
 archiveFile fname = do
   mArchiveDir <- asks (cfgArchiveDir . wConfig)
   case mArchiveDir of
     Just archiveDir -> do
       time <- liftIO getCurrentTime
-      let dest    = archiveDestination archiveDir (utctDay time) fname
+      let dest    = toFilePath (archiveDestination archiveDir (utctDay time) fname)
           destDir = takeDirectory dest
       exists <- liftIO $ doesFileExist dest
       let finalDest
             | exists    = dest ++ "." ++ show secs
             | otherwise = dest
           secs = realToFrac (utctDayTime time) :: Fixed E2
-      result <- liftIO . tryIOError $
-        createDirectoryIfMissing True destDir >> renameFile fname finalDest
+      result <- liftIO . tryIOError $ do
+        createDirectoryIfMissing True destDir
+        renameFile (toFilePath fname) finalDest
       case result of
         Left e -> do
-          $(logError) $ fromStrings ["Could not archive ", fname, ": ", show e]
-          return ()
+          $(logError) $ fromStrings ["Could not archive ", show fname, ": ", show e]
         Right () ->
-          $(logInfo) $ fromStrings ["Archived ", fname, " -> ", finalDest]
+          $(logInfo) $ fromStrings ["Archived ", show fname, " -> ", finalDest]
     Nothing -> return ()
 
 handleRetries :: WatcherM ()
 handleRetries = return () -- TODO
 
-registerFailure :: FilePath -> RunnableWatcher -> ProcessorError -> WatcherM ()
+registerFailure :: AbsPath -> RunnableWatcher -> ProcessorError -> WatcherM ()
 registerFailure fname wch err = do
-  $(logError) $ fromStrings [wName wch, " failed on ", fname, ": ", show err]
+  $(logError) $ fromStrings [wName wch, " failed on ", show fname, ": ", show err]
   return () -- TODO
 
               
-runWatcherOnFile :: RunnableWatcher -> FilePath -> WatcherM ()
+runWatcherOnFile :: RunnableWatcher -> AbsPath -> WatcherM ()
 runWatcherOnFile wch filename = do
   cfg <- processorConfig
   chan <- asks wChan
@@ -287,17 +293,18 @@ runWatcherOnFile wch filename = do
   addToRunningProcessors filename fp
   where
 
-processWatcher :: UTCTime -> FilePath -> RunnableWatcher -> ProcessorM ()
-processWatcher now filename Watcher{..} = do
-  $(logInfo) $ fromStrings ["Running ", wName, " on ", filename]
+processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
+processWatcher now abspath Watcher{..} = do
+  $(logInfo) $ fromStrings ["Running ", wName, " on ", show abspath]
   case wProcessor of
     Just compiled  -> do
       let preprocessor = maybe yieldFilePath getCompiled wPreProcessor
-          preprocess   = runPreProcessor source now (preprocessor filename)
+          preprocess   = runPreProcessor source now (preprocessor filepath)
           process      = uncurry $ getCompiled compiled
-          source       = sourceFile filename
+          source       = sourceFile filepath
+          filepath     = toFilePath abspath
       preprocess >>= mapM_ process
-      $(logInfo) $ fromStrings ["Finished ", wName, " on ", filename]
+      $(logInfo) $ fromStrings ["Finished ", wName, " on ", show abspath]
     Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 
 
@@ -308,9 +315,9 @@ processorConfig = do
 
 
 addToRunningProcessors
-  :: FilePath
+  :: AbsPath
   -> FileProcessor
   -> WatcherM ()
 addToRunningProcessors path fp = do
   s@WatcherState{wThreads=ts} <- get
-  put $ s {wThreads = insertWith (++) (normalise path) [fp] ts}
+  put $ s {wThreads = insertWith (++) path [fp] ts}

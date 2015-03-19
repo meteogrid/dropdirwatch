@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module System.DirWatch.UtilSpec (main, spec) where
 
 import Test.Hspec

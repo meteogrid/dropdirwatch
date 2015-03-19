@@ -6,21 +6,21 @@ env:
 watchers:
   - name: evalSingleLine
     paths:
-      - lala
-      - lolo
+      - /lala
+      - /lolo
     preprocessor:
       eval: yieldModifiedBaseName ("foo_"++)
   - name: importPlugin
     paths:
-      - lala
-      - lolo
+      - /lala
+      - /lolo
     preprocessor:
       plugin: Plugin:addPrefix
       prefix: foo
   - name: evalMultiLine
     paths:
-      - lala
-      - lolo
+      - /lala
+      - /lolo
     preprocessor:
       eval: \filename ->
               let {
@@ -33,8 +33,8 @@ watchers:
                 }
   - name: shell
     paths:
-      - lala
-      - lolo
+      - /lala
+      - /lolo
     processor:
       shell:
         - scp $FILENAME $BAR

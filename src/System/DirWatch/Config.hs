@@ -30,15 +30,15 @@ import Data.Monoid (Monoid(..))
 import qualified Data.Text as T
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
-import System.FilePath.GlobPattern (GlobPattern)
 import System.DirWatch.ShellEnv (ShellEnv)
 import System.DirWatch.Processor (Processor, ProcessorM)
 import System.DirWatch.PreProcessor (PreProcessor)
+import System.DirWatch.Util (AbsPath)
 
 data Config w
   = Config {
       cfgPluginDirs :: [FilePath]
-    , cfgArchiveDir :: Maybe FilePath
+    , cfgArchiveDir :: Maybe AbsPath
     , cfgShellEnv   :: ShellEnv
     , cfgWatchers   :: [w]
   } deriving Show
@@ -73,7 +73,7 @@ instance FromJSON SerializableConfig where
 data Watcher p h
   = Watcher {
       wName         :: String
-    , wPaths        :: [GlobPattern]
+    , wPaths        :: [AbsPath]
     , wPreProcessor :: Maybe p
     , wProcessor    :: Maybe h
   } deriving (Eq, Show)

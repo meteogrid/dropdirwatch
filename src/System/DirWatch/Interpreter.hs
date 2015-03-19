@@ -31,6 +31,7 @@ import System.DirWatch.Config (
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
 import System.DirWatch.Compiler (EvalEnv(..), interpret)
+import Data.Default (def)
 
 data CompilerConfig
   = CompilerConfig {
@@ -47,7 +48,8 @@ compileConfig
 compileConfig c = runCompiler cConfig $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers=watchers}
-  where cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
+  where
+    cConfig = CompilerConfig {ccSearchPath = cfgPluginDirs c}
 
 runCompiler :: CompilerConfig -> Compiler a -> IO (Either [Text] a)
 runCompiler c = flip runReaderT c . runExceptT . unCompiler
