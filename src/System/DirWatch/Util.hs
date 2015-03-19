@@ -73,11 +73,18 @@ joinAbsPath (AbsPath base) = AbsPath . joinPath . (base:)
 
 
 globMatch :: AbsPath -> AbsPath -> Bool
-globMatch (AbsPath p) (AbsPath g) = p ~~ g
+globMatch (AbsPath p) (AbsPath g) = p ~~ g && matchVisibility fp fg
+  where
+    matchVisibility ('.':a) ('.':b) = a ~~ b
+    matchVisibility ('.':_) _       = False
+    matchVisibility a       b       = a ~~ b
+    fp = takeFileName p
+    fg = takeFileName g
 {-# INLINE globMatch #-}
 
 absPathsMatching :: AbsPath -> IO [AbsPath]
-absPathsMatching (AbsPath pattern) = fmap (map AbsPath) (namesMatching pattern)
+absPathsMatching p@(AbsPath pattern)
+  = fmap (filter (`globMatch` p) . map AbsPath) (namesMatching pattern)
 {-# INLINE absPathsMatching #-}
 
 

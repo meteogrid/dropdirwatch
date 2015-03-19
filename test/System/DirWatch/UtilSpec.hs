@@ -10,14 +10,22 @@ main = hspec spec
 
 spec :: Spec
 spec = do
+  describe "globMatch" $ do
+    it "matches a visible file" $
+      "/foo.bin" `globMatch` "/*.bin" `shouldBe` True
+    it "does not match an invisible file" $
+      "/.foo.bin" `globMatch` "/*.bin"  `shouldBe` False
+    it "matches an invisible file if the pattern explicitly allows it" $
+      "/.foo.bin" `globMatch` "/.*.bin"  `shouldBe` True
+
   describe "takePatternDirectory" $ do
-    it "takes longest directory name" $ do
+    it "takes longest directory name" $
       takePatternDirectory "/usr/local/*/foo" `shouldBe` "/usr/local/"
-    it "will be root if wildcard on first token" $ do
+    it "will be root if wildcard on first token" $
       takePatternDirectory "/*/local/config" `shouldBe` "/"
-    it "is id if directory without wildcards" $ do
+    it "is id if directory without wildcards" $
       takePatternDirectory "/usr/local/config/" `shouldBe` "/usr/local/config/"
-    it "is id if a file without wildcards" $ do
+    it "is id if a file without wildcards" $
       takePatternDirectory "/usr/local/config" `shouldBe` "/usr/local/config"
 
   describe "archiveDestination" $ do

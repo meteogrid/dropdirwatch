@@ -187,23 +187,21 @@ setupWatches = do
   chan <- asks wChan
   forM_ watchers $ \watcher -> do
     forM_ (wPaths watcher) $ \globPattern -> do
-      let baseDir  = takePatternDirectory globPattern
+      let baseDir   = takePatternDirectory globPattern
           absPath p = joinAbsPath baseDir [p]
+          fnameMatches p = absPath p `globMatch` globPattern
           name = wName watcher
           logArrival file = runStderrLoggingT $
             $(logInfo) $ fromStrings ["File ", show file, " arrived"]
       mError <- addIWatch baseDir $ \event -> do
         case event of
-          MovedIn{..} | absPath filePath `globMatch` globPattern
-                      , not isDirectory -> do
+          MovedIn{isDirectory=False, ..} | fnameMatches filePath -> do
             logArrival (absPath filePath)
             writeChan chan $ Work watcher (absPath filePath)
-          Closed{..} | wasWriteable, not isDirectory ->
-            case maybeFilePath of
-              Just filePath | absPath filePath `globMatch` globPattern -> do
-                logArrival (absPath filePath)
-                writeChan chan $ Work watcher (absPath filePath)
-              _ -> return ()
+          Closed{ wasWriteable=True, isDirectory=False
+                , maybeFilePath=Just filePath} | fnameMatches filePath -> do
+            logArrival (absPath filePath)
+            writeChan chan $ Work watcher (absPath filePath)
           _ -> return ()
       case mError of
         Just e ->
@@ -282,7 +280,7 @@ archiveFile fname = do
   case mArchiveDir of
     Just archiveDir -> do
       time <- liftIO getCurrentTime
-      let dest    = toFilePath (archiveDestination archiveDir (utctDay time) fname)
+      let dest = toFilePath (archiveDestination archiveDir (utctDay time) fname)
           destDir = takeDirectory dest
       exists <- liftIO $ doesFileExist dest
       let finalDest
@@ -294,7 +292,8 @@ archiveFile fname = do
         renameFile (toFilePath fname) finalDest
       case result of
         Left e -> do
-          $(logError) $ fromStrings ["Could not archive ", show fname, ": ", show e]
+          $(logError) $ fromStrings [ "Could not archive ", show fname, ": "
+                                    , show e]
         Right () ->
           $(logInfo) $ fromStrings ["Archived ", show fname, " -> ", finalDest]
     Nothing -> return ()
@@ -304,7 +303,8 @@ handleRetries = return () -- TODO
 
 registerFailure :: AbsPath -> RunnableWatcher -> ProcessorError -> WatcherM ()
 registerFailure fname wch err = do
-  $(logError) $ fromStrings [wName wch, " failed on ", show fname, ": ", show err]
+  $(logError) $ fromStrings  [wName wch, " failed on ", show fname, ": "
+                            , show err]
   return () -- TODO
 
               
