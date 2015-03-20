@@ -16,7 +16,7 @@ import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Default (def)
 import Data.Monoid ((<>))
-import Data.Text as T (Text, pack, unlines, lines)
+import qualified Data.Text as T (Text, pack, unlines, lines)
 import Data.Yaml (decodeFileEither)
 import System.INotify
 
@@ -92,10 +92,10 @@ watchConfig configFile stopCond pluginDirs ino = do
 whenM :: Monad m => m Bool -> m () -> m ()
 whenM cond act = cond >>= flip when act
 
-logCompileError :: MonadLogger m => [Text] -> m ()
+logCompileError :: MonadLogger m => [T.Text] -> m ()
 logCompileError = $(logError) . ("\n"<>) . T.unlines
 
-decodeAndCompile :: FilePath -> IO (Either [Text] RunnableConfig)
+decodeAndCompile :: FilePath -> IO (Either [T.Text] RunnableConfig)
 decodeAndCompile fname = do
   ePConfig <- decodeFileEither fname
   case ePConfig of
@@ -103,7 +103,8 @@ decodeAndCompile fname = do
       eRet <- compileConfig pConfig
       case eRet of
         Right c -> return (Right c)
+        Left (WontCompile es) -> return . Left . map T.pack $
+          "Error when compiling config:":(concat (map (lines . errMsg) es))
         Left es -> return . Left $
-          ["Error when compiling config:\n"] ++ T.lines (T.pack (show es))
-    Left e        -> return . Left $
-                       [fromStrings ["Could not parse YAML: ", show e]]
+          ["Error when compiling config:"] ++ T.lines (T.pack (show es))
+    Left e -> return . Left $ [fromStrings ["Could not parse YAML: ", show e]]
