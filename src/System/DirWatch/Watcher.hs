@@ -19,7 +19,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Exception (try, finally)
-import Control.Monad (forM_, forM, void, when)
+import Control.Monad (forM_, forM, void, when, join)
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.IO.Class (MonadIO(liftIO))
@@ -32,7 +32,7 @@ import Control.Monad.State.Strict (
 import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
-import Data.List (intercalate, foldl')
+import Data.List (intercalate, foldl', find)
 import Data.Fixed (Fixed, E2)
 import Data.HashMap.Strict as HM (
     HashMap
@@ -63,6 +63,7 @@ import System.DirWatch.Config (
   , RunnableWatcher
   , Config(..)
   , Watcher(..)
+  , WatchedPath (..)
   )
 import System.DirWatch.Util (
     AbsPath
@@ -182,7 +183,7 @@ runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
   fmap snd $ waitChild loopth
 
 mkDirMap :: [RunnableWatcher] -> DirMap
-mkDirMap ws = foldl' go empty $ [(w,p) | w<-ws, p<-wPaths w]
+mkDirMap ws = foldl' go empty $ [(w,p) | w<-ws, p<-wGlobs w]
   where go m (w,p) = insertWith (++) (takePatternDirectory p) [w] m
 
 endLoop :: StopCond -> IO ()
@@ -198,7 +199,7 @@ setupWatches = do
   forM_ dir_watchers $ \(baseDir, watchers) -> do
     let names = intercalate ", " $ map wName watchers
         handleFile filePath = do
-          let matchedWatchers = filter (any (p `globMatch`) . wPaths) watchers
+          let matchedWatchers = filter (any (p `globMatch`) . wGlobs) watchers
               p = joinAbsPath baseDir [filePath]
           when (not (null matchedWatchers)) $
             writeChan chan $ Work matchedWatchers p
@@ -233,7 +234,7 @@ checkExistingFiles = do
     existingMap <- fmap (fromListWith (++) . concat . concat . concat) $
       forM (elems dir_watchers) $ \watchers -> do
         forM watchers $ \watcher -> do
-          forM (wPaths watcher) $ \globPattern ->  do
+          forM (wGlobs watcher) $ \globPattern ->  do
             paths <- absPathsMatching globPattern
             forM paths $ \abspath -> return (abspath, [watcher])
     existing <- forM (toList existingMap) $ \(abspath, watchers) -> do
@@ -335,7 +336,9 @@ processWatcher now abspath Watcher{..} = do
   $(logDebug) $ fromStrings ["Running \"", wName, "\" on ", show abspath]
   case wProcessor of
     Just processor  -> do
-      let preprocessor = fromMaybe yieldFilePath wPreProcessor
+      let pathPreproc  = join $ fmap wpPreprocessor $
+                           find (globMatch abspath . wpGlob) wPaths
+          preprocessor = fromMaybe yieldFilePath pathPreproc
           preprocess   = runPreProcessor source now (preprocessor filepath)
           process      = uncurry processor
           source       = sourceFile filepath
@@ -344,6 +347,9 @@ processWatcher now abspath Watcher{..} = do
       $(logDebug) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
     Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
 
+
+wGlobs :: Watcher a b -> [AbsPath]
+wGlobs = map wpGlob . wPaths
 
 processorConfig :: WatcherM ProcessorConfig
 processorConfig = do

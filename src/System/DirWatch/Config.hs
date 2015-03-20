@@ -5,6 +5,7 @@
 module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
+  , WatchedPath (..)
   , Code (..)
   , SymOrCode (..)
   , SymbolTable (..)
@@ -114,16 +115,10 @@ failIfDuplicate msg func objs =  foldM_ check [] (map func objs) >> return objs
       | o `elem` acc = fail $ concat [msg, ": ", show o]
       | otherwise    = return (o:acc)
 
-data SymOrCode code
-  = SymName  String
-  | SymCode  code
-  deriving (Eq, Show)
-
 data Watcher pp p
   = Watcher {
       wName         :: String
-    , wPaths        :: [AbsPath]
-    , wPreProcessor :: Maybe pp
+    , wPaths        :: [WatchedPath pp]
     , wProcessor    :: Maybe p
   } deriving (Eq, Show)
 
@@ -132,7 +127,6 @@ instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
     = object [
         "name"         .= wName
       , "paths"        .= wPaths
-      , "preprocessor" .= wPreProcessor
       , "processor"    .= wProcessor
     ]
 
@@ -141,15 +135,50 @@ instance FromJSON SerializableWatcher where
     | not (null unexpectedKeys)
     = fail $ "Unexpected keys for watcher: " ++
              T.unpack (T.intercalate ", " unexpectedKeys)
-    | otherwise
-    = Watcher <$>
-      v .:   "name" <*>
-      v .:   "paths" <*>
-      v .:?  "preprocessor" <*>
-      v .:?  "processor"
+    | otherwise = do
+        name   <- v .: "name"
+        paths  <- v .: "paths"
+        pp     <- v .:?  "preprocessor"
+        proc   <- v .:?  "processor"
+        return $ Watcher {
+            wName      = name
+          , wPaths     = case pp of
+                           Just pp' -> map (assignPp pp') paths
+                           Nothing  -> paths
+          , wProcessor = proc
+          }
     where expectedKeys = ["name", "paths", "preprocessor", "processor"]
           unexpectedKeys = filter (`notElem` expectedKeys) $ HM.keys v
+          assignPp pp wp@WatchedPath{wpPreprocessor=mPp}
+            = wp {wpPreprocessor=mPp <|> Just pp}
   parseJSON _ = fail "Expected an object for \"watcher\""
+
+data WatchedPath pp
+  = WatchedPath {
+      wpGlob         :: AbsPath
+    , wpPreprocessor :: Maybe pp
+    }
+  deriving (Show, Eq)
+
+instance ToJSON pp => ToJSON (WatchedPath pp) where
+  toJSON WatchedPath{wpGlob=p, wpPreprocessor=Nothing} = toJSON p
+  toJSON WatchedPath{..} = toJSON $ object [ "pattern"         .= wpGlob
+                                           , "preprocessor" .= wpPreprocessor]
+
+instance FromJSON pp => FromJSON (WatchedPath pp) where
+  parseJSON (Object v) = do
+    path <- v .: "pattern"
+    pp <- v .:? "preprocessor"
+    return $ WatchedPath path pp
+  parseJSON s@String{} = do
+    path <- parseJSON s
+    return $ WatchedPath path Nothing
+  parseJSON _ = fail "\"paths\" item must be either an object or string"
+
+data SymOrCode code
+  = SymName  String
+  | SymCode  code
+  deriving (Eq, Show)
 
 instance ToJSON code => ToJSON (SymOrCode code) where
   toJSON (SymName name) = toJSON name

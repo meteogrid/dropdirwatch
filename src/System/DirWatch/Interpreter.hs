@@ -9,6 +9,7 @@ module System.DirWatch.Interpreter (
   , GhcError (..)
 ) where
 
+import Control.Monad (forM)
 import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
@@ -31,6 +32,7 @@ import Language.Haskell.Interpreter.Unsafe (unsafeRunInterpreterWithArgs)
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
+  , WatchedPath (..)
   , SymOrCode (..)
   , SymbolTable (..)
   , ModuleImport (..)
@@ -65,26 +67,27 @@ runCompiler c act = do
 
 compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
 compileWatcher w = do
-  mPp <- case wPreProcessor w of
-          Nothing -> return Nothing
-          Just p  -> do
-            syms <- Compiler $ lift $ asks cfgPreProcessors
-            fmap Just $ compileSymOrCodeWith compileCode p syms
+  paths <- forM (wPaths w) $ \wp@WatchedPath{..} -> do
+             pp <- case wpPreprocessor of
+                     Nothing -> return Nothing
+                     Just pp -> fmap Just $
+                       compileSymOrCodeWith cfgPreProcessors compileCode pp
+             return wp {wpPreprocessor=pp}
   mP <- case wProcessor w of
           Nothing -> return Nothing
-          Just p  -> do
-            syms <- Compiler $ lift $ asks cfgProcessors
-            fmap Just $ compileSymOrCodeWith compileProcessor p syms
-  return $ w {wPreProcessor=mPp, wProcessor=mP}
+          Just p  -> fmap Just $
+            compileSymOrCodeWith cfgProcessors compileProcessor p
+  return $ w {wPaths=paths, wProcessor=mP}
 
 compileSymOrCodeWith
-  :: (Functor m, Monad m)
-  => (code -> m a) -> SymOrCode code -> SymbolTable code -> m a
-compileSymOrCodeWith func (SymName name) (SymbolTable syms)
-  = case HM.lookup name syms of
+  :: (SerializableConfig -> SymbolTable t)
+  -> (t -> Compiler b) -> SymOrCode t -> Compiler b
+compileSymOrCodeWith _ func (SymCode code)         = func code
+compileSymOrCodeWith symGetter func (SymName name) = do
+  SymbolTable syms <- Compiler $ lift $ asks symGetter
+  case HM.lookup name syms of
       Nothing   -> fail ("Unresolved symbol: " ++ name)
       Just code -> func code
-compileSymOrCodeWith func (SymCode code) _ = func code
 
 
 compileProcessor :: ProcessorCode -> Compiler Processor

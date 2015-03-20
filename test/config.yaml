@@ -17,7 +17,9 @@ watchers:
   - name: evalSingleLine
     paths:
       - /lala
-      - /lolo
+      - pattern: /lolo
+        preprocessor:
+          eval: yieldFilePath
     preprocessor:
       imports:
         - Prelude as P
