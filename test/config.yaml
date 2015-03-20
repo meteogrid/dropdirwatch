@@ -2,6 +2,8 @@ pluginDirs:
   - test/plugins
 imports:
   - Data.List as L
+packageDbs:
+  - .cabal-sandbox/*packages.conf.d
 processors:
   someProcessor:
     eval: undefined

@@ -39,6 +39,7 @@ import System.DirWatch.ShellEnv (ShellEnv)
 import System.DirWatch.Processor (Processor, ProcessorM)
 import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Util (AbsPath)
+import System.FilePath.GlobPattern (GlobPattern)
 
 data Config pp p ppc pc
   = Config {
@@ -47,6 +48,7 @@ data Config pp p ppc pc
     , cfgShellEnv      :: ShellEnv
     , cfgWatchers      :: [Watcher pp p]
     , cfgWaitSeconds   :: Int
+    , cfgPackageDbs    :: [GlobPattern]
     , cfgImports       :: [ModuleImport]
     , cfgProcessors    :: SymbolTable pc
     , cfgPreProcessors :: SymbolTable ppc
@@ -80,6 +82,7 @@ instance ToJSON SerializableConfig where
     , "imports"       .= cfgImports
     , "processors"    .= cfgProcessors
     , "preprocessors" .= cfgPreProcessors
+    , "packageDbs"    .= cfgPackageDbs
     ]
 
 instance FromJSON SerializableConfig where
@@ -90,6 +93,7 @@ instance FromJSON SerializableConfig where
       v .:? "env" .!= mempty <*>
       v .:  "watchers" <*>
       v .:? "waitSeconds" .!= 60 <*>
+      v .:? "packageDbs" .!= [] <*>
       v .:? "imports" .!= [] <*>
       v .:? "processors"    .!= SymbolTable HM.empty <*>
       v .:? "preprocessors" .!= SymbolTable HM.empty

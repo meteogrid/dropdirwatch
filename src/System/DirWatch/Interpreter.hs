@@ -15,7 +15,6 @@ import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     InterpreterT
   , InterpreterError
-  , runInterpreter
   , interpret
   , as
   , setImportsQ
@@ -25,6 +24,7 @@ import Language.Haskell.Interpreter (
   , searchPath
   , OptionVal ((:=))
   )
+import Language.Haskell.Interpreter.Unsafe (unsafeRunInterpreterWithArgs)
 import System.DirWatch.Config (
     Config(..)
   , Watcher(..)
@@ -41,6 +41,7 @@ import System.DirWatch.Config (
   , compileWith
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
+import System.FilePath.Glob (namesMatching)
 
 newtype Compiler a
   = Compiler {
@@ -55,7 +56,10 @@ compileConfig c = runCompiler c $ do
 
 runCompiler
   :: SerializableConfig -> Compiler a -> IO (Either InterpreterError a)
-runCompiler c = flip runReaderT c . runInterpreter . unCompiler
+runCompiler c act = do
+  pkgDbDirs <- fmap concat $ mapM namesMatching (cfgPackageDbs c)
+  let args = ["-package-db="++d | d <-pkgDbDirs]
+  flip runReaderT c . unsafeRunInterpreterWithArgs args $ unCompiler act
 
 
 compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher

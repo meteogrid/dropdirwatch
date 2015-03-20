@@ -199,15 +199,15 @@ setupWatches = do
   chan <- asks wChan
   forM_ dir_watchers $ \(baseDir, watchers) -> do
     let names = intercalate ", " $ map wName watchers
-        go filePath = do
+        handleFile filePath = do
           let matchedWatchers = filter (any (p `globMatch`) . wPaths) watchers
               p = joinAbsPath baseDir [filePath]
           when (not (null matchedWatchers)) $
             writeChan chan $ Work matchedWatchers p
     mError <- addIWatch baseDir $ \case
-                MovedIn{isDirectory=False, ..}       -> go filePath
+                MovedIn{isDirectory=False, ..}       -> handleFile filePath
                 Closed{ wasWriteable=True, isDirectory=False
-                      , maybeFilePath=Just filePath} -> go filePath
+                      , maybeFilePath=Just filePath} -> handleFile filePath
                 _ -> return ()
     case mError of
       Just e ->
