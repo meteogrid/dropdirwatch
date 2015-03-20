@@ -31,6 +31,7 @@ import Data.Aeson (
   , (.!=)
   )
 import Data.Monoid (Monoid(..))
+import Data.Function (on)
 import Data.Default (Default(def))
 import qualified Data.Text as T
 import qualified Data.List.Split as L
@@ -120,7 +121,10 @@ data Watcher pp p
       wName         :: String
     , wPaths        :: [WatchedPath pp]
     , wProcessor    :: Maybe p
-  } deriving (Eq, Show)
+  } deriving Show
+
+instance Eq (Watcher a b) where
+  (==) = (==) `on` wName
 
 instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
   toJSON Watcher{..}

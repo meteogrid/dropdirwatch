@@ -32,7 +32,7 @@ import Control.Monad.State.Strict (
 import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Monoid (Monoid(..))
-import Data.List (intercalate, foldl', find)
+import Data.List (intercalate, foldl', find, nub)
 import Data.Fixed (Fixed, E2)
 import Data.HashMap.Strict as HM (
     HashMap
@@ -184,7 +184,11 @@ runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
 
 mkDirMap :: [RunnableWatcher] -> DirMap
 mkDirMap ws = foldl' go empty $ [(w,p) | w<-ws, p<-wGlobs w]
-  where go m (w,p) = insertWith (++) (takePatternDirectory p) [w] m
+  where go m (w,p) = insertWith mergeLists (takePatternDirectory p) [w] m
+        mergeLists [new] old
+          | new `elem` old = old
+          | otherwise      = new:old
+        mergeLists new old = nub (new++old)
 
 endLoop :: StopCond -> IO ()
 endLoop mvar = putMVar mvar ()

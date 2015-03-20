@@ -11,9 +11,9 @@ main = do
   args <- getArgs
   let (configFile, reload) =
         case args of
-          ["-reload"]        -> (defaultConfigFile, True)
-          [fname]            -> (fname, False)
-          [fname, "-reload"] -> (fname, True)
-          []                 -> (defaultConfigFile, False)
-          _                  -> error $ "Invalid args: " ++ show args
+          ["--reload"]        -> (defaultConfigFile, True)
+          [fname]             -> (fname, False)
+          [fname, "--reload"] -> (fname, True)
+          []                  -> (defaultConfigFile, False)
+          _                   -> error $ "Invalid args: " ++ show args
   runWithConfigFile configFile reload
