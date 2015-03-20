@@ -33,7 +33,6 @@ import System.DirWatch.Config (
   , Watcher(..)
   , SymOrCode (..)
   , SymbolTable (..)
-  , Compiled
   , ModuleImport (..)
   , SerializableConfig
   , SerializableWatcher
@@ -41,7 +40,6 @@ import System.DirWatch.Config (
   , RunnableWatcher
   , Code (..)
   , ProcessorCode (..)
-  , compileWith
   )
 import System.DirWatch.Processor (Processor, shellProcessor)
 import System.FilePath.Glob (namesMatching)
@@ -81,12 +79,12 @@ compileWatcher w = do
 
 compileSymOrCodeWith
   :: (Functor m, Monad m)
-  => (code -> m a) -> SymOrCode code -> SymbolTable code -> m (Compiled a code)
+  => (code -> m a) -> SymOrCode code -> SymbolTable code -> m a
 compileSymOrCodeWith func (SymName name) (SymbolTable syms)
   = case HM.lookup name syms of
       Nothing   -> fail ("Unresolved symbol: " ++ name)
-      Just code -> compileWith func code
-compileSymOrCodeWith func (SymCode code) _ = compileWith func code
+      Just code -> func code
+compileSymOrCodeWith func (SymCode code) _ = func code
 
 
 compileProcessor :: ProcessorCode -> Compiler Processor

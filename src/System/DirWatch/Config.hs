@@ -6,7 +6,6 @@ module System.DirWatch.Config (
     Config (..)
   , Watcher (..)
   , Code (..)
-  , Compiled
   , SymOrCode (..)
   , SymbolTable (..)
   , ProcessorCode (..)
@@ -15,8 +14,6 @@ module System.DirWatch.Config (
   , SerializableWatcher
   , RunnableWatcher
   , RunnableConfig
-  , getCompiled
-  , compileWith
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
@@ -33,6 +30,7 @@ import Data.Aeson (
   , (.!=)
   )
 import Data.Monoid (Monoid(..))
+import Data.Default (Default(def))
 import qualified Data.Text as T
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
@@ -55,18 +53,26 @@ data Config pp p ppc pc
     , cfgPreProcessors :: SymbolTable ppc
   } deriving Show
 
+instance Default (Config a b c d) where
+  def = Config {
+        cfgPluginDirs    = mempty
+      , cfgArchiveDir    = Nothing
+      , cfgShellEnv      = mempty
+      , cfgWatchers      = mempty
+      , cfgWaitSeconds   = 60
+      , cfgPackageDbs    = mempty
+      , cfgImports       = mempty
+      , cfgProcessors    = SymbolTable HM.empty 
+      , cfgPreProcessors = SymbolTable HM.empty
+      }
+
 type SerializableConfig
   = Config (SymOrCode Code) (SymOrCode ProcessorCode)
            Code             ProcessorCode
 type SerializableWatcher = Watcher (SymOrCode Code) (SymOrCode ProcessorCode)
 type RunnableConfig
-  = Config (Compiled (PreProcessor ProcessorM) Code)
-           (Compiled Processor ProcessorCode)
-           Code
-           ProcessorCode
-type RunnableWatcher
-  = Watcher (Compiled (PreProcessor ProcessorM) Code)
-            (Compiled Processor ProcessorCode)
+  = Config (PreProcessor ProcessorM) Processor Code ProcessorCode
+type RunnableWatcher = Watcher (PreProcessor ProcessorM) Processor
 
 newtype SymbolTable p
   = SymbolTable (HM.HashMap String p) deriving (Show, Eq, ToJSON, FromJSON)
@@ -89,15 +95,15 @@ instance ToJSON SerializableConfig where
 instance FromJSON SerializableConfig where
   parseJSON (Object v)
     = Config <$>
-      v .:? "pluginDirs" .!= [] <*>
+      v .:? "pluginDirs"    .!= cfgPluginDirs def <*>
       v .:? "archiveDir" <*>
-      v .:? "env" .!= mempty <*>
+      v .:? "env"           .!= cfgShellEnv def <*>
       (v .: "watchers" >>= failIfDuplicate "Duplicate watcher" wName) <*>
-      v .:? "waitSeconds" .!= 60 <*>
-      v .:? "packageDbs" .!= [] <*>
-      v .:? "imports" .!= [] <*>
-      v .:? "processors"    .!= SymbolTable HM.empty <*>
-      v .:? "preprocessors" .!= SymbolTable HM.empty
+      v .:? "waitSeconds"   .!= cfgWaitSeconds def <*>
+      v .:? "packageDbs"    .!= cfgPackageDbs def <*>
+      v .:? "imports"       .!= cfgImports def <*>
+      v .:? "processors"    .!= cfgProcessors def <*>
+      v .:? "preprocessors" .!= cfgPreProcessors def
   parseJSON _ = fail "Expected an object for \"config\""
 
 failIfDuplicate
@@ -153,24 +159,6 @@ instance FromJSON code => FromJSON (SymOrCode code) where
   parseJSON o@Object{} = SymCode <$> parseJSON o
   parseJSON s@String{} = SymName <$> parseJSON s
   parseJSON _          = fail "Must be either string or object"
-
-
-newtype Compiled a code = Compiled (a, code)
-getCompiled :: Compiled a code -> a
-getCompiled (Compiled a) = fst a
-
-instance Show code => Show (Compiled a code) where
-  show (Compiled (_,a)) = show a
-
-instance Eq code => Eq (Compiled a code) where
-  Compiled (_,a) == Compiled (_,b) = a==b
-
-compileWith :: Functor m => (code -> m a) -> code -> m (Compiled a code)
-compileWith f code = fmap (\a -> Compiled (a,code)) (f code)
-
-
-instance ToJSON code => ToJSON (Compiled a code) where
-  toJSON (Compiled (_,code)) = toJSON code
 
 newtype ModuleImport
   = ModuleImport {unModuleImport :: (String, Maybe String)}

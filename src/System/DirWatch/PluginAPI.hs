@@ -9,27 +9,40 @@ module System.DirWatch.PluginAPI (
   , toStrictByteStringC
   , formatTime
   , formattedCurrentTime
-  , module API
+  , module System.DirWatch.Processor
+  , module System.DirWatch.PreProcessor
+  , module System.DirWatch.ShellEnv
+  , module System.DirWatch.Logging
+  , module System.FilePath.Posix
+  , module Control.Applicative
+  , module Control.Monad.Trans.Resource
+  , module Data.Aeson
+  , module Data.ByteString
+  , module Data.Conduit
+  , module Data.Conduit.Binary
+  , module Data.Monoid
 ) where
 
-import Control.Applicative as API (pure, (<$>), (<*>), (<|>))
-import Control.Monad.Trans.Resource as API (MonadResource)
+import Control.Applicative (pure, (<$>), (<*>), (<|>))
+import Control.Monad.Trans.Resource (MonadResource)
 import Control.Monad (liftM)
-import Data.Monoid as API (mempty, mappend, (<>))
-import Data.Aeson as API (
+import Data.Monoid (mempty, mappend, (<>))
+import Data.Aeson (
     FromJSON (..)
   , Value (..)
   , (.:)
   , (.:?)
   , (.!=)
   )
-import Data.Conduit as API (Conduit, Source, (=$=), ($$), await, yield)
+import Data.Conduit (Conduit, Source, (=$=), ($$), await, yield)
+import Data.Conduit.Binary (sourceLbs, sinkLbs)
 import qualified Data.HashMap.Strict as HM
-import System.FilePath.Posix as API
-import System.DirWatch.Processor as API hiding (ProcessorConfig, runProcessorM)
-import System.DirWatch.PreProcessor as API hiding (runPreProcessor)
-import System.DirWatch.ShellEnv as API (envSet, envAppend)
-import Data.ByteString as API (ByteString)
+import System.FilePath.Posix
+import System.DirWatch.Processor hiding (ProcessorConfig, runProcessorM)
+import System.DirWatch.PreProcessor hiding (runPreProcessor)
+import System.DirWatch.ShellEnv (envSet, envAppend)
+import System.DirWatch.Logging (logDebug, logInfo, logWarn, logError)
+import Data.ByteString (ByteString)
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS

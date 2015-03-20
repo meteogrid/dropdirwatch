@@ -38,8 +38,8 @@ library
                      , System.DirWatch.PluginAPI
                      , System.DirWatch.PreProcessor
                      , System.DirWatch.Processor
-  other-modules:       System.DirWatch.Config
                      , System.DirWatch.ShellEnv
+  other-modules:       System.DirWatch.Config
                      , System.DirWatch.Logging
                      , System.DirWatch.Interpreter
                      , System.DirWatch.Threading

@@ -63,7 +63,6 @@ import System.DirWatch.Config (
   , RunnableWatcher
   , Config(..)
   , Watcher(..)
-  , getCompiled
   )
 import System.DirWatch.Util (
     AbsPath
@@ -118,7 +117,6 @@ data ChanMessage
   = Work [RunnableWatcher] AbsPath
   | WakeUp
   | Finish
-  deriving Show
 
 data WatcherEnv
   = WatcherEnv {
@@ -336,10 +334,10 @@ processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
 processWatcher now abspath Watcher{..} = do
   $(logDebug) $ fromStrings ["Running \"", wName, "\" on ", show abspath]
   case wProcessor of
-    Just compiled  -> do
-      let preprocessor = maybe yieldFilePath getCompiled wPreProcessor
+    Just processor  -> do
+      let preprocessor = fromMaybe yieldFilePath wPreProcessor
           preprocess   = runPreProcessor source now (preprocessor filepath)
-          process      = uncurry $ getCompiled compiled
+          process      = uncurry processor
           source       = sourceFile filepath
           filepath     = toFilePath abspath
       preprocess >>= mapM_ process

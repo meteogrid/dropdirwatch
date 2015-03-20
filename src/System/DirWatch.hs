@@ -1,13 +1,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 module System.DirWatch (
-    runWithConfigFile
+    Config (..)
+  , Watcher (..)
+  , RunnableWatcher
+  , RunnableConfig
+  , runWithConfigFile
+  , runWithConfig
+  , def
 ) where
 
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Monad (when, void)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.Default (def)
 import Data.Monoid ((<>))
 import Data.Text as T (Text, pack, unlines, lines)
 import Data.Yaml (decodeFileEither)
@@ -24,7 +31,7 @@ runWithConfigFile configFile reloadConfig = do
   pluginDirs <- newEmptyMVar
   let mainLoop initialConfig initialState = do
         newState <- liftIO $ runWatchLoop initialConfig initialState stopCond
-        when (reloadConfig) $ do
+        if reloadConfig then do
           eNewConfig <- liftIO $ decodeAndCompile configFile
           case eNewConfig of
             Right newConfig -> do
@@ -35,9 +42,10 @@ runWithConfigFile configFile reloadConfig = do
               $(logInfo) "Will continue with last valid version"
               watchNewPluginDirs pluginDirs initialConfig
               mainLoop initialConfig (Just newState)
+        else return newState
 
   eConfig <- decodeAndCompile configFile
-  case eConfig of
+  _ <- case eConfig of
     Right initialConfig -> withINotify $ \ino -> do
       when (reloadConfig) $ do
         watchNewPluginDirs pluginDirs initialConfig
@@ -46,6 +54,14 @@ runWithConfigFile configFile reloadConfig = do
     Left err -> do
       runStderrLoggingT (logCompileError err)
       error "Unable to load config"
+  -- TODO: Cleanup state
+  return ()
+
+runWithConfig :: RunnableConfig -> IO ()
+runWithConfig config = do
+  _ <- mkStopCond >>= runWatchLoop config Nothing
+  return ()
+  -- TODO: Cleanup state
 
 watchNewPluginDirs
   :: MonadIO m => MVar [FilePath] -> Config pp p ppc pc -> m ()
