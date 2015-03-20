@@ -33,9 +33,12 @@ import Data.Aeson (
 import Data.Monoid (Monoid(..))
 import Data.Function (on)
 import Data.Default (Default(def))
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.List.Split as L
 import qualified Data.HashMap.Strict as HM
+import Data.Hashable (Hashable(hashWithSalt))
+import Data.Time (NominalDiffTime)
 import System.DirWatch.ShellEnv (ShellEnv)
 import System.DirWatch.Processor (Processor, ProcessorM)
 import System.DirWatch.PreProcessor (PreProcessor)
@@ -48,11 +51,13 @@ data Config pp p ppc pc
     , cfgArchiveDir    :: Maybe AbsPath
     , cfgShellEnv      :: ShellEnv
     , cfgWatchers      :: [Watcher pp p]
-    , cfgWaitSeconds   :: Int
+    , cfgStableTime    :: NominalDiffTime
     , cfgPackageDbs    :: [GlobPattern]
     , cfgImports       :: [ModuleImport]
     , cfgProcessors    :: SymbolTable pc
     , cfgPreProcessors :: SymbolTable ppc
+    , cfgNumRetries    :: Int
+    , cfgRetryInterval :: NominalDiffTime
   } deriving Show
 
 instance Default (Config a b c d) where
@@ -61,11 +66,13 @@ instance Default (Config a b c d) where
       , cfgArchiveDir    = Nothing
       , cfgShellEnv      = mempty
       , cfgWatchers      = mempty
-      , cfgWaitSeconds   = 60
+      , cfgStableTime    = 60
       , cfgPackageDbs    = mempty
       , cfgImports       = mempty
       , cfgProcessors    = SymbolTable HM.empty 
       , cfgPreProcessors = SymbolTable HM.empty
+      , cfgNumRetries    = 12
+      , cfgRetryInterval = 300
       }
 
 type SerializableConfig
@@ -87,11 +94,13 @@ instance ToJSON SerializableConfig where
     , "env"           .= cfgShellEnv
     , "pluginDirs"    .= cfgPluginDirs
     , "watchers"      .= cfgWatchers
-    , "waitSeconds"   .= cfgWaitSeconds
+    , "stableTime"    .= (realToFrac cfgStableTime :: Double)
+    , "packageDbs"    .= cfgPackageDbs
     , "imports"       .= cfgImports
     , "processors"    .= cfgProcessors
     , "preprocessors" .= cfgPreProcessors
-    , "packageDbs"    .= cfgPackageDbs
+    , "numRetries"    .= cfgNumRetries
+    , "retryInterval" .= (realToFrac cfgRetryInterval :: Double)
     ]
 
 instance FromJSON SerializableConfig where
@@ -101,12 +110,19 @@ instance FromJSON SerializableConfig where
       v .:? "archiveDir" <*>
       v .:? "env"           .!= cfgShellEnv def <*>
       (v .: "watchers" >>= failIfDuplicate "Duplicate watcher" wName) <*>
-      v .:? "waitSeconds"   .!= cfgWaitSeconds def <*>
+      maybeDiffTime (v .:? "stableTime") (cfgStableTime def) <*>
       v .:? "packageDbs"    .!= cfgPackageDbs def <*>
       v .:? "imports"       .!= cfgImports def <*>
       v .:? "processors"    .!= cfgProcessors def <*>
-      v .:? "preprocessors" .!= cfgPreProcessors def
+      v .:? "preprocessors" .!= cfgPreProcessors def <*>
+      v .:? "numRetries"    .!= cfgNumRetries def <*>
+      maybeDiffTime (v .:? "retryInterval") (cfgRetryInterval def)
   parseJSON _ = fail "Expected an object for \"config\""
+
+maybeDiffTime
+  :: Functor m
+  => m (Maybe Double) -> NominalDiffTime -> m NominalDiffTime
+maybeDiffTime p dflt = fmap (fromMaybe dflt . fmap realToFrac) p
 
 failIfDuplicate
   :: (Monad m, Eq b, Show b) => String -> (a -> b) -> [a] -> m [a]
@@ -125,6 +141,8 @@ data Watcher pp p
 
 instance Eq (Watcher a b) where
   (==) = (==) `on` wName
+instance Hashable (Watcher a b) where
+  hashWithSalt n = hashWithSalt n . wName
 
 instance (ToJSON a, ToJSON b) => ToJSON (Watcher a b) where
   toJSON Watcher{..}

@@ -33,10 +33,10 @@ module System.DirWatch.Processor (
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Concurrent (threadDelay, forkIO)
+import Control.Exception (IOException, fromException)
 import Control.Exception.Lifted as E (
     Exception
   , SomeException
-  , IOException
   , handle
   , catch
   , finally
@@ -62,6 +62,7 @@ import Data.Default (Default(def))
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Monoid (mempty, mappend)
 import Data.Typeable (Typeable)
+import GHC.IO.Exception (IOErrorType (ResourceVanished))
 import System.DirWatch.Logging (
     MonadLogger
   , LoggingT
@@ -73,6 +74,7 @@ import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
 import qualified System.DirWatch.Threading as Th
 import System.Exit (ExitCode(..))
+import System.IO.Error (ioeGetErrorType)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (
     CreateProcess(..)
@@ -208,7 +210,7 @@ executeShellCmd ShellCmd{..} = do
     p <- createProcess process
     case (p, shInput) of
       ((Just s_in, Just s_out, Just s_err, ph), Just input) -> do
-        input $$ sinkHandle s_in
+        (input $$ sinkHandle s_in) `catchE` ignoreResourceVanished
         exitCode <- waitForProcess ph
         liftIO $ do
           out <- BS.hGetContents s_out
@@ -225,6 +227,13 @@ executeShellCmd ShellCmd{..} = do
     ExitSuccess   -> return (out, err)
     ExitFailure c -> throwE (ShellError c out err)
 
+ignoreResourceVanished :: ProcessorError -> ProcessorM ()
+ignoreResourceVanished pe@(ProcessorException e) =
+  case fromException e of
+    -- Command closed pipe without reading from it, ignore it
+    Just ioe | ioeGetErrorType ioe == ResourceVanished -> return ()
+    _                                                  -> throwE pe
+ignoreResourceVanished e = throwE e
 
 -- | Execute several shell commands.
 --   NOTE: Only the first command will get the contents piped into it
