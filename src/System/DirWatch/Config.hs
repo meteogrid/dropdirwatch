@@ -20,6 +20,7 @@ module System.DirWatch.Config (
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
+import Control.Monad (foldM_)
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -91,13 +92,21 @@ instance FromJSON SerializableConfig where
       v .:? "pluginDirs" .!= [] <*>
       v .:? "archiveDir" <*>
       v .:? "env" .!= mempty <*>
-      v .:  "watchers" <*>
+      (v .: "watchers" >>= failIfDuplicate "Duplicate watcher" wName) <*>
       v .:? "waitSeconds" .!= 60 <*>
       v .:? "packageDbs" .!= [] <*>
       v .:? "imports" .!= [] <*>
       v .:? "processors"    .!= SymbolTable HM.empty <*>
       v .:? "preprocessors" .!= SymbolTable HM.empty
   parseJSON _ = fail "Expected an object for \"config\""
+
+failIfDuplicate
+  :: (Monad m, Eq b, Show b) => String -> (a -> b) -> [a] -> m [a]
+failIfDuplicate msg func objs =  foldM_ check [] (map func objs) >> return objs
+  where
+    check acc o
+      | o `elem` acc = fail $ concat [msg, ": ", show o]
+      | otherwise    = return (o:acc)
 
 data SymOrCode code
   = SymName  String

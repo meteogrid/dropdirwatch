@@ -1,0 +1,7 @@
+watchers:
+  - name: evalSingleLine
+    paths:
+      - /lala
+  - name: evalSingleLine
+    paths:
+      - /lala
