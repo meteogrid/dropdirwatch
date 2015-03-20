@@ -35,7 +35,8 @@ import Data.List (intercalate, foldl', find)
 import Data.Fixed (Fixed, E2)
 import Data.HashSet (HashSet)
 import Data.Hashable (Hashable(hashWithSalt))
-import qualified Data.HashSet as HS (union, singleton, toList, fromList)
+import qualified Data.HashSet as HS (
+  union, singleton, toList, fromList, filter, null)
 import Data.HashMap.Strict as HM (
   HashMap, insertWith, unionWith, empty, elems, toList, fromList, fromListWith)
 import Data.Maybe (catMaybes, fromMaybe)
@@ -91,7 +92,7 @@ watchedEvents :: [EventVariety]
 watchedEvents = [MoveIn, CloseWrite]
 
 data ChanMessage
-  = Work [RunnableWatcher] AbsPath
+  = Work (HashSet RunnableWatcher) AbsPath
   | WakeUp
   | Finish
 
@@ -165,15 +166,14 @@ setupWatches :: WatcherM ()
 setupWatches = do
   dir_watchers <- asks (toList . wDirMap)
   chan <- asks wChan
-  forM_ dir_watchers $ \(baseDir, watcherSet) -> do
-    let names = intercalate ", " $ map wName watchers
-        watchers = HS.toList watcherSet
+  forM_ dir_watchers $ \(baseDir, watchers) -> do
+    let names = intercalate ", " $ map wName (HS.toList watchers)
         handleFile filePath = do
-          let matchedWatchers = filter (any (p `globMatch`) . wGlobs) watchers
+          let matched = HS.filter (any (p `globMatch`) . wGlobs) watchers
               p = joinAbsPath baseDir [filePath]
-          when (not (null matchedWatchers)) $ do
+          when (not (HS.null matched)) $ do
             runStderrLoggingT $ $(logInfo) $ fromStrings [show p," has arrived"]
-            writeChan chan $ Work matchedWatchers p
+            writeChan chan $ Work matched p
     mError <- addIWatch baseDir $ \case
                 MovedIn{isDirectory=False, ..}       -> handleFile filePath
                 Closed{ wasWriteable=True, isDirectory=False
@@ -191,7 +191,7 @@ loop = do
   handleFinishedFiles
   msg <- getMessage
   case msg of
-    Work ws file -> runWatchersOnFile (zip ws (repeat [])) file >> loop
+    Work ws file -> runWatchersOnFile (HS.toList ws) file >> loop
     WakeUp       -> loop
     Finish       -> return ()
 
@@ -201,12 +201,12 @@ checkExistingFiles = do
   waitSecs <- asks (cfgStableTime . wConfig)
   chan <- asks wChan
   void $ liftIO $ forkChild $ do
-    existingMap <- fmap (fromListWith (++) . concat . concat . concat) $
+    existingMap <- fmap (fromListWith HS.union . concat . concat . concat) $
       forM (elems dir_watchers) $ \watchers -> do
         forM (HS.toList watchers) $ \watcher -> do
           forM (wGlobs watcher) $ \globPattern ->  do
             paths <- absPathsMatching globPattern
-            forM paths $ \abspath -> return (abspath, [watcher])
+            forM paths $ \abspath -> return (abspath, HS.singleton watcher)
     existing <- forM (toList existingMap) $ \(abspath, watchers) -> do
       mt <- fmap modificationTime $ getFileStatus (toFilePath abspath)
       return (mt, watchers, abspath)
@@ -272,10 +272,10 @@ handleFinishedFiles = do
         archiveFile fname
         return (Nothing, return())
       (retries, []) ->
-        return (Nothing, runWatchersOnFile retries fname)
+        return (Nothing, runFailedWatchersOnFile retries fname)
       (retries, remaining) ->
         return ( Just (fname, HS.fromList remaining)
-               , runWatchersOnFile retries fname)
+               , runFailedWatchersOnFile retries fname)
   put state {wThreads=HM.fromList (catMaybes mRemaining)}
   sequence_ retries
   when (not (null retries)) $ do
@@ -327,8 +327,12 @@ archiveFile fname = do
 
 
               
-runWatchersOnFile :: [(RunnableWatcher,[Failure])] -> AbsPath -> WatcherM ()
-runWatchersOnFile watchers filename = do
+runWatchersOnFile :: [RunnableWatcher] -> AbsPath -> WatcherM ()
+runWatchersOnFile watchers = runFailedWatchersOnFile (zip watchers (repeat []))
+
+runFailedWatchersOnFile
+  :: [(RunnableWatcher,[Failure])] -> AbsPath -> WatcherM ()
+runFailedWatchersOnFile watchers filename = do
   cfg <- processorConfig
   chan <- asks wChan
   start <- liftIO getPOSIXTime
