@@ -33,7 +33,8 @@ import System.FilePath.GlobPattern ((~~))
 -- |Takes the non-wildcard deepest directory name from a GlobPattern
 takePatternDirectory :: AbsPath -> AbsPath
 takePatternDirectory
-  = AbsPath . joinPath . takeWhile notWildcard . splitPath . unAbsPath
+  = AbsPath . takeDirectory . joinPath . takeWhile notWildcard . splitPath
+  . unAbsPath
   where
     notWildcard p = all (`notElem` p) "?*[]()|"
 

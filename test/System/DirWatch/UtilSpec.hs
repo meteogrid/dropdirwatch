@@ -20,13 +20,13 @@ spec = do
 
   describe "takePatternDirectory" $ do
     it "takes longest directory name" $
-      takePatternDirectory "/usr/local/*/foo" `shouldBe` "/usr/local/"
+      takePatternDirectory "/usr/local/*/foo" `shouldBe` "/usr/local"
     it "will be root if wildcard on first token" $
       takePatternDirectory "/*/local/config" `shouldBe` "/"
-    it "is id if directory without wildcards" $
-      takePatternDirectory "/usr/local/config/" `shouldBe` "/usr/local/config/"
-    it "is id if a file without wildcards" $
-      takePatternDirectory "/usr/local/config" `shouldBe` "/usr/local/config"
+    it "strips trailing slash" $
+      takePatternDirectory "/usr/local/config/" `shouldBe` "/usr/local/config"
+    it "treats paths without trailing slash as files" $
+      takePatternDirectory "/usr/local/config" `shouldBe` "/usr/local"
 
   describe "archiveDestination" $ do
     let day = fromGregorian 2015 3 15
