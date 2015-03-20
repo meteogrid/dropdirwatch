@@ -1,7 +1,9 @@
 module System.DirWatchSpec (main, spec) where
 
 import Test.Hspec
-import System.DirWatch
+import Data.Yaml (decodeFileEither)
+import System.DirWatch.Config (Config(..))
+import System.DirWatch.Interpreter (compileConfig)
 import System.DirWatch.ShellEnv (envSet, envAppend)
 import Data.Monoid (mempty)
 

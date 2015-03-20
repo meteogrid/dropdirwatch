@@ -5,6 +5,8 @@ module System.DirWatch.Interpreter (
     runCompiler
   , compileWatcher
   , compileConfig
+  , InterpreterError (..)
+  , GhcError (..)
 ) where
 
 import Control.Applicative (Applicative)
@@ -14,7 +16,8 @@ import qualified Data.HashMap.Strict as HM
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     InterpreterT
-  , InterpreterError
+  , InterpreterError (..)
+  , GhcError (..)
   , interpret
   , as
   , setImportsQ
