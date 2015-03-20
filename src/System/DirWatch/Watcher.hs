@@ -205,7 +205,8 @@ setupWatches = do
         handleFile filePath = do
           let matchedWatchers = filter (any (p `globMatch`) . wGlobs) watchers
               p = joinAbsPath baseDir [filePath]
-          when (not (null matchedWatchers)) $
+          when (not (null matchedWatchers)) $ do
+            runStderrLoggingT $ $(logInfo) $ fromStrings [show p," has arrived"]
             writeChan chan $ Work matchedWatchers p
     mError <- addIWatch baseDir $ \case
                 MovedIn{isDirectory=False, ..}       -> handleFile filePath
