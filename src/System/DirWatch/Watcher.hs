@@ -14,9 +14,8 @@ module System.DirWatch.Watcher (
   , processWatcher
 ) where
 
-import Control.Arrow (second)
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
-import Control.Concurrent (threadDelay, forkIO)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Exception (try, finally)
@@ -25,7 +24,8 @@ import Control.Monad.Base (MonadBase)
 import Control.Monad.Trans.Control (MonadBaseControl(..))
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Reader (MonadReader(ask), asks, ReaderT, runReaderT)
-import Control.Monad.State.Strict (MonadState (get,put), StateT, runStateT)
+import Control.Monad.State.Strict (
+  MonadState(get,put), modify, gets, StateT, runStateT)
 import Data.Conduit.Binary (sourceFile)
 import Data.Default (def)
 import Data.Either (partitionEithers)
@@ -36,9 +36,10 @@ import Data.Fixed (Fixed, E2)
 import Data.HashSet (HashSet)
 import Data.Hashable (Hashable(hashWithSalt))
 import qualified Data.HashSet as HS (
-  union, singleton, toList, fromList, filter, null)
+  union, empty, singleton, toList, fromList, filter, null)
 import Data.HashMap.Strict as HM (
-  HashMap, insertWith, unionWith, empty, elems, toList, fromList, fromListWith)
+    HashMap, insertWith, unionWith, empty, elems, toList, fromList
+  , fromListWith, lookup)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
 import Data.Time.Clock (
@@ -66,24 +67,38 @@ import System.DirWatch.Processor (
 import System.DirWatch.PreProcessor (runPreProcessor, yieldFilePath)
 
 type StopCond = MVar ()
-type ThreadMap = HashMap AbsPath (HashSet RunningWatcher)
+type ThreadMap = HashMap AbsPath ThreadsPerPath
 type DirMap = HashMap AbsPath (HashSet RunnableWatcher)
 
-type Failure = (POSIXTime,ProcessorError)
 data RunningWatcher
   = RunningWatcher {
       rwHandle   :: SomeThreadHandle ProcessorError
     , rwWatcher  :: RunnableWatcher
-    , rwFailures :: [Failure]
     , rwStart    :: POSIXTime
     }
-  | FailedWatcher {
-      rwWatcher     :: RunnableWatcher
-    , rwFailures    :: [Failure]
+
+isHandling :: ThreadMap -> RunnableWatcher -> AbsPath -> Bool
+isHandling tmap w p
+  = case HM.lookup p tmap of
+      Just ThreadsPerPath{..} -> w `elem` (map rwWatcher (HS.toList tRunning))
+      Nothing                 -> False
+
+data ThreadsPerPath
+  = ThreadsPerPath {
+      tRunning  :: !(HashSet RunningWatcher)
+    , tFinished :: !(HashSet RunningWatcher)
+    , tFailed   :: !(HashSet RunningWatcher)
     }
+initTPP :: [RunningWatcher] -> ThreadsPerPath
+initTPP running = mempty {tRunning=HS.fromList running}
+
+instance Monoid ThreadsPerPath where
+  mempty = ThreadsPerPath HS.empty HS.empty HS.empty
+  ThreadsPerPath a b c `mappend` ThreadsPerPath a' b' c'
+    = ThreadsPerPath (HS.union a a') (HS.union b b') (HS.union c c')
+
 instance Hashable RunningWatcher where
-  hashWithSalt n RunningWatcher{..} = hashWithSalt n rwWatcher
-  hashWithSalt n FailedWatcher{..}  = hashWithSalt n rwWatcher + 1
+  hashWithSalt n = hashWithSalt n . rwWatcher
 
 instance Eq RunningWatcher where
   (==) = (==) `on` rwWatcher
@@ -110,11 +125,8 @@ data WatcherState
       wThreads :: ThreadMap
   }
 instance Monoid WatcherState where
-  mempty  = WatcherState empty
-  mappend a b
-   = WatcherState {
-       wThreads = unionWith HS.union (wThreads a) (wThreads b)
-   }
+  mempty  = WatcherState mempty
+  mappend a b = WatcherState (unionWith mappend (wThreads a) (wThreads b))
 
 newtype WatcherM a
   = WatcherM {
@@ -172,7 +184,8 @@ setupWatches = do
           let matched = HS.filter (any (p `globMatch`) . wGlobs) watchers
               p = joinAbsPath baseDir [filePath]
           when (not (HS.null matched)) $ do
-            runStderrLoggingT $ $(logInfo) $ fromStrings [show p," has arrived"]
+            runStderrLoggingT $ $(logInfo) $
+              fromStrings [show p," has arrived"]
             writeChan chan $ Work matched p
     mError <- addIWatch baseDir $ \case
                 MovedIn{isDirectory=False, ..}       -> handleFile filePath
@@ -200,20 +213,24 @@ checkExistingFiles = do
   dir_watchers <- asks wDirMap
   waitSecs <- asks (cfgStableTime . wConfig)
   chan <- asks wChan
+  tmap <- gets wThreads
+  let filterPaths w = filter (not . isHandling tmap w)
   void $ liftIO $ forkChild $ do
     existingMap <- fmap (fromListWith HS.union . concat . concat . concat) $
       forM (elems dir_watchers) $ \watchers -> do
         forM (HS.toList watchers) $ \watcher -> do
           forM (wGlobs watcher) $ \globPattern ->  do
-            paths <- absPathsMatching globPattern
+            paths <- fmap (filterPaths watcher) (absPathsMatching globPattern)
             forM paths $ \abspath -> return (abspath, HS.singleton watcher)
     existing <- forM (toList existingMap) $ \(abspath, watchers) -> do
       mt <- fmap modificationTime $ getFileStatus (toFilePath abspath)
       return (mt, watchers, abspath)
     sleep waitSecs
     forM_ existing $ \(modTime, watchers, abspath) -> do
-      modTime' <- fmap modificationTime (getFileStatus (toFilePath abspath))
-      when (modTime' == modTime) $ do
+      eModTime <- tryIOError $ -- File might have been handled while we were
+                               -- waiting and not be there anymore
+                  fmap modificationTime (getFileStatus (toFilePath abspath))
+      when (eModTime == Right modTime) $ do
         -- file has not been modified, assume it is stable and work on it.
         -- If it has been modified we can ignore it assuming we'll be notified
         -- when it has been closed
@@ -234,68 +251,56 @@ getMessage = asks wChan >>= liftIO . readChan
 
 handleFinishedFiles :: WatcherM ()
 handleFinishedFiles = do
-  state@WatcherState{wThreads=ts} <- get
-  let running = HM.toList ts
-  retryInterval <- asks (cfgRetryInterval . wConfig)
-  (mRemaining,retries) <- fmap unzip $ forM running $ \(fname, runningPs) -> do
-    eRemaining <- forM (HS.toList runningPs) $ \fp -> do
-      now <- liftIO getPOSIXTime
-      let goNext t = (now-t) > retryInterval
-      case fp of
-        RunningWatcher{..} -> fmap Right $ do
-          result <- liftIO (tryWaitSomeChild rwHandle)
-          case result of
-            Nothing         -> return (Just fp)
-            Just Nothing    -> return Nothing
-            Just (Just err) -> do
-              let errParts = [ "Watcher ", show (wName rwWatcher)
-                             , " failed on ", show fname, " "
-                             , retryText (length rwFailures + 1), ": "
-                             , show err]
-              numRetries <- asks (cfgNumRetries . wConfig)
-              if length rwFailures < numRetries
-                then do
-                  $(logError) $ fromStrings $ errParts ++ [", will retry later"]
-                  return $ Just $
-                    FailedWatcher { rwWatcher=rwWatcher
-                                  , rwFailures=(now,err):rwFailures}
-                else do
-                  $(logError) $ fromStrings $ errParts ++ [
-                    ", which is too much. Will NOT retry anymore"]
-                  return Nothing
-        FailedWatcher{rwFailures=fails@((tFail,_):_), ..} | goNext tFail ->
-          return $ Left $ (rwWatcher,fails)
-        _ -> return $ Right $ Just fp
-    case second catMaybes (partitionEithers eRemaining) of
-      ([], []) -> do
-        $(logInfo) $ fromStrings ["Finished processing ", show fname]
+  tsL <- gets (HM.toList . wThreads)
+  remaining <- fmap catMaybes $ forM tsL $ \(fname,tmap) -> do
+    batch <- forM (HS.toList (tRunning tmap)) $ \fp -> do
+      result <- liftIO $ tryWaitSomeChild (rwHandle fp)
+      case result of
+        Nothing      -> return $ Right (Right fp) -- still running
+        Just Nothing -> return $ Right (Left fp)  -- finished
+        Just _       -> return $ Left fp          -- finished with error
+    let tmap' =
+          ThreadsPerPath {
+              tRunning  = HS.fromList stillRunning
+            , tFailed   = HS.union (tFailed tmap) (HS.fromList failedNow)
+            , tFinished = HS.union (tFinished tmap) (HS.fromList finishedNow)
+            }
+        (finishedNow, stillRunning) = partitionEithers nonFailures
+        (failedNow, nonFailures)    = partitionEithers batch
+        hadFailures  = not . HS.null . tFailed   $ tmap'
+        someFinished = not . HS.null . tFinished $ tmap'
+        anyRunning   = not . HS.null . tRunning  $ tmap'
+    case (hadFailures, someFinished, anyRunning) of
+      (False, _, False) -> do
+        $(logInfo) $ fromStrings [ "Finished processing ", show fname
+                                 , " without errors"]
         archiveFile fname
-        return (Nothing, return())
-      (retries, []) ->
-        return (Nothing, runFailedWatchersOnFile retries fname)
-      (retries, remaining) ->
-        return ( Just (fname, HS.fromList remaining)
-               , runFailedWatchersOnFile retries fname)
-  put state {wThreads=HM.fromList (catMaybes mRemaining)}
-  sequence_ retries
-  when (not (null retries)) $ do
-    chan <- asks wChan
-    void . liftIO . forkIO $ (sleep retryInterval >> writeChan chan WakeUp)
+        return Nothing
+      (True, True, False) -> do
+        $(logWarn) $ fromStrings [ "Finished processing ", show fname
+                                  , " with some errors"]
+        archiveFile fname
+        return Nothing
+      (True,False,False) -> do
+        $(logError) $ fromStrings [ "All watchers failed on ", show fname]
+        return Nothing
+      (_,_,True) -> return $ Just (fname,tmap')
+  modify $ \s -> s {wThreads=HM.fromList remaining}
 
 sleep :: NominalDiffTime -> IO ()
 sleep = threadDelay . floor . (*1000000)
-
-    
-
 
 retryText :: Int -> String
 retryText num
   | num == 0  = ""
   | otherwise = concat [prefix, show num, numSuffix, suffix]
   where numSuffix
-          | num `mod` 10 == 1 = "st"
-          | num `mod` 10 == 2 = "nd"
-          | num `mod` 10 == 3 = "rd"
+          | num /= 11
+          , num `mod` 10 == 1 = "st"
+          | num /= 12
+          , num `mod` 10 == 2 = "nd"
+          | num /= 13
+          , num `mod` 10 == 3 = "rd"
           | otherwise         = "th"
         prefix = "for the "
         suffix = " time"
@@ -328,22 +333,34 @@ archiveFile fname = do
 
               
 runWatchersOnFile :: [RunnableWatcher] -> AbsPath -> WatcherM ()
-runWatchersOnFile watchers = runFailedWatchersOnFile (zip watchers (repeat []))
-
-runFailedWatchersOnFile
-  :: [(RunnableWatcher,[Failure])] -> AbsPath -> WatcherM ()
-runFailedWatchersOnFile watchers filename = do
+runWatchersOnFile watchers filename = do
   cfg <- processorConfig
   chan <- asks wChan
   start <- liftIO getPOSIXTime
-  fps <- forM watchers $ \(wch,failures) -> do
-    let proc = processWatcher (posixSecondsToUTCTime start) filename wch
+  numRetries <- asks (cfgNumRetries . wConfig)
+  retryInterval <- asks (cfgRetryInterval . wConfig)
+  fps <- forM watchers $ \w -> do
+    let process n = do
+          result <- runProcessorM cfg $ processWatcher startUTC filename w
+          case (result, n<=numRetries) of
+            (Left e, True) -> do
+              runStderrLoggingT $ $(logWarn) $ fromStrings $
+                errMsg e n ++ [" Will retry in ", show retryInterval]
+              sleep retryInterval
+              process (n+1)
+            (Left e, False) -> do
+              runStderrLoggingT $ $(logError) $ fromStrings $ errMsg e n
+              return result
+            (Right _, _) -> return result
+        startUTC = posixSecondsToUTCTime start
+        errMsg e n = ["Watcher ", show (wName w), " failed"] ++
+                     (if numRetries>0 then [" ",retryText n, ": ", show e]
+                                      else [])
     liftIO $ do
-      th <- forkChild $ finally (runProcessorM cfg proc) (writeChan chan WakeUp)
+      th <- forkChild $ finally (process 1) (writeChan chan WakeUp)
       return RunningWatcher { rwHandle   = toSomeThreadHandle th
                             , rwStart    = start
-                            , rwWatcher  = wch
-                            , rwFailures = failures}
+                            , rwWatcher  = w}
   addToRunning filename fps
   where
 
@@ -378,5 +395,5 @@ addToRunning
   -> [RunningWatcher]
   -> WatcherM ()
 addToRunning path fps = do
-  s@WatcherState{wThreads=ts} <- get
-  put $ s {wThreads = insertWith HS.union path (HS.fromList fps) ts}
+  ts <- gets wThreads
+  modify $ \s -> s {wThreads = insertWith mappend path (initTPP fps) ts}

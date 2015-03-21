@@ -56,6 +56,8 @@ import qualified Control.Monad.Trans.Except as E
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Conduit (Conduit, ConduitM, Source, ($$))
 import Data.Conduit.Binary (sinkHandle)
+import qualified Data.Text as T (unpack)
+import Data.Text.Encoding (decodeUtf8')
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Default (Default(def))
@@ -225,7 +227,7 @@ executeShellCmd ShellCmd{..} = do
       _ -> throwE $ InternalError "Unexpected state when creating process"
   case exitCode of
     ExitSuccess   -> return (out, err)
-    ExitFailure c -> throwE (ShellError c out err)
+    ExitFailure c -> throwE (ShellError shCmd c out err)
 
 ignoreResourceVanished :: ProcessorError -> ProcessorM ()
 ignoreResourceVanished pe@(ProcessorException e) =
@@ -271,14 +273,29 @@ tryWaitChild = liftIO . Th.tryWaitChild
 data ProcessorError
   = ProcessorException SomeException
   | ShellError {
-      seCode   :: Int
-    , seStdout :: ByteString
+      seCmd    :: String
+    , seCode   :: Int
+    , seStdOut :: ByteString
     , seStdErr :: ByteString
     }
   | InternalError String
-  deriving (Show, Typeable)
+  deriving (Typeable)
 
 instance Exception ProcessorError
+instance Show ProcessorError where
+  show ShellError{..}
+    = concat $ [ "ShellError: Command ", show seCmd, " exited with status "
+               , show seCode, ".\n"] ++
+               (if BS.null seStdOut
+                 then []
+                 else ["Captured stdout:\n", tryDecode seStdOut, "\n"]) ++
+               (if BS.null seStdErr
+                 then [] else ["Captured stderr:\n", tryDecode seStdErr, "\n"])
+  show (ProcessorException e) = concat ["ProcessorException: ", show e]
+  show (InternalError e) = concat ["InternalError: ", e]
+
+tryDecode :: ByteString -> String
+tryDecode s = either (const (show s)) T.unpack (decodeUtf8' s)
 
 throwE :: ProcessorError -> ProcessorM a
 throwE = ProcessorM . E.throwE
