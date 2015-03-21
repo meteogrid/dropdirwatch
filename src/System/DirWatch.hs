@@ -65,7 +65,7 @@ runWithConfigFile configFile reloadConfig = do
   -- TODO: Cleanup state
   return ()
 
-runWithConfig :: RunnableConfig -> IO ()
+runWithConfig :: RunnableConfig pc ppc -> IO ()
 runWithConfig config = do
   _ <- mkStopCond >>= runWatchLoop config Nothing
   return ()
@@ -103,7 +103,8 @@ whenM cond act = cond >>= flip when act
 logCompileError :: MonadLogger m => [T.Text] -> m ()
 logCompileError = $(logError) . ("\n"<>) . T.unlines
 
-decodeAndCompile :: FilePath -> IO (Either [T.Text] RunnableConfig)
+decodeAndCompile
+  :: FilePath -> IO (Either [T.Text] (RunnableConfig Code ProcessorCode))
 decodeAndCompile fname = do
   ePConfig <- decodeFileEither fname
   case ePConfig of

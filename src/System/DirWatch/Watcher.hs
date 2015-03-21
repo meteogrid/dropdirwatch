@@ -4,6 +4,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module System.DirWatch.Watcher (
     WatcherState
@@ -112,12 +114,15 @@ data ChanMessage
   | Finish
 
 data WatcherEnv
-  = WatcherEnv {
-      wConfig   :: RunnableConfig
+  = forall a b. WatcherEnv {
+      wConfig   :: RunnableConfig a b
     , wChan     :: Chan ChanMessage
     , wInotify  :: INotify
     , wDirMap   :: DirMap
   }
+
+askConfig :: (forall pc ppc. RunnableConfig pc ppc -> a) -> WatcherM a
+askConfig f = ask >>= \(WatcherEnv c _ _ _) -> return (f c)
 
 
 data WatcherState
@@ -152,7 +157,7 @@ runWatcherEnv env state
   . unWatcherM
 
 runWatchLoop
-  :: RunnableConfig -> Maybe WatcherState -> StopCond -> IO WatcherState
+  :: RunnableConfig a b -> Maybe WatcherState -> StopCond -> IO WatcherState
 runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
   let dirMap = mkDirMap (cfgWatchers cfg)
   env <- WatcherEnv <$> pure cfg <*> newChan <*> pure ino <*> pure dirMap
@@ -211,7 +216,7 @@ loop = do
 checkExistingFiles :: WatcherM ()
 checkExistingFiles = do
   dir_watchers <- asks wDirMap
-  waitSecs <- asks (cfgStableTime . wConfig)
+  waitSecs <- askConfig cfgStableTime
   chan <- asks wChan
   tmap <- gets wThreads
   let filterPaths w = filter (not . isHandling tmap w)
@@ -307,7 +312,7 @@ retryText num
 
 archiveFile :: AbsPath -> WatcherM ()
 archiveFile fname = do
-  mArchiveDir <- asks (cfgArchiveDir . wConfig)
+  mArchiveDir <- askConfig cfgArchiveDir
   case mArchiveDir of
     Just archiveDir -> do
       time <- liftIO getCurrentTime
@@ -337,8 +342,8 @@ runWatchersOnFile watchers filename = do
   cfg <- processorConfig
   chan <- asks wChan
   start <- liftIO getPOSIXTime
-  numRetries <- asks (cfgNumRetries . wConfig)
-  retryInterval <- asks (cfgRetryInterval . wConfig)
+  numRetries <- askConfig cfgNumRetries
+  retryInterval <- askConfig cfgRetryInterval
   fps <- forM watchers $ \w -> do
     let process n = do
           result <- runProcessorM cfg $ processWatcher startUTC filename w
@@ -386,7 +391,7 @@ wGlobs = map wpGlob . wPaths
 
 processorConfig :: WatcherM ProcessorConfig
 processorConfig = do
-  env <- asks (cfgShellEnv . wConfig)
+  env <- askConfig cfgShellEnv
   return $ def {pShellEnv = env}
 
 

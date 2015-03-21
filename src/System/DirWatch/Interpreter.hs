@@ -52,7 +52,8 @@ newtype Compiler a
   } deriving (Functor, Applicative, Monad)
 
 compileConfig
-  :: SerializableConfig -> IO (Either InterpreterError RunnableConfig)
+  :: SerializableConfig
+  -> IO (Either InterpreterError (RunnableConfig Code ProcessorCode))
 compileConfig c = runCompiler c $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}
