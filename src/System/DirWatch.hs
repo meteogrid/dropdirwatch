@@ -14,11 +14,14 @@ import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Monad (when, void)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Control.Concurrent.MVar (newMVar, readMVar, modifyMVar_, tryPutMVar)
+import Control.Exception (finally)
 import Data.Default (def)
 import Data.Monoid ((<>))
 import qualified Data.Text as T (Text, pack, unlines, lines)
 import Data.Yaml (decodeFileEither)
 import System.INotify
+import System.Posix.Signals (installHandler, Handler(Catch), sigINT, sigTERM)
 
 import System.DirWatch.Interpreter
 import System.DirWatch.Logging
@@ -29,10 +32,14 @@ runWithConfigFile :: FilePath -> Bool -> IO ()
 runWithConfigFile configFile reloadConfig = do
   stopCond <- mkStopCond
   pluginDirs <- newEmptyMVar
+  interrupted <- newMVar 0
   let mainLoop initialConfig initialState = do
         newState <- liftIO $ runWatchLoop initialConfig initialState stopCond
-        if reloadConfig then do
-          eNewConfig <- liftIO $ decodeAndCompile configFile
+        shouldStop <- liftIO $ wasInterrupted interrupted
+        if reloadConfig && not shouldStop then do
+          eNewConfig <- liftIO $
+            finally (decodeAndCompile configFile)
+                    (installSignalHandlers stopCond interrupted)
           case eNewConfig of
             Right newConfig -> do
               watchNewPluginDirs pluginDirs newConfig
@@ -44,7 +51,8 @@ runWithConfigFile configFile reloadConfig = do
               mainLoop initialConfig (Just newState)
         else return newState
 
-  eConfig <- decodeAndCompile configFile
+  eConfig <- finally (decodeAndCompile configFile)
+                     (installSignalHandlers stopCond interrupted)
   _ <- case eConfig of
     Right initialConfig -> withINotify $ \ino -> do
       when (reloadConfig) $ do
@@ -108,3 +116,16 @@ decodeAndCompile fname = do
         Left es -> return . Left $
           ["Error when compiling config:"] ++ T.lines (T.pack (show es))
     Left e -> return . Left $ [fromStrings ["Could not parse YAML: ", show e]]
+
+installSignalHandlers :: StopCond -> MVar Int -> IO ()
+installSignalHandlers stopCond interrupted = do
+  let handler signal =  do
+        runStderrLoggingT $
+            $(logInfo) $ fromStrings ["Caught signal: ", signal]
+        modifyMVar_ interrupted (return . (+1))
+        void $ tryPutMVar stopCond ()
+  void $ installHandler sigINT (Catch $ handler "INT") Nothing
+  void $ installHandler sigTERM (Catch $ handler "TERM") Nothing
+
+wasInterrupted :: MVar Int -> IO Bool
+wasInterrupted = fmap (>0) . readMVar
