@@ -14,6 +14,7 @@ import Control.Applicative (Applicative)
 import Control.Monad.Reader (ReaderT(..), asks)
 import Control.Monad.Trans (lift)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
 import Data.Typeable (Typeable)
 import Language.Haskell.Interpreter (
     InterpreterT
@@ -53,10 +54,17 @@ newtype Compiler a
 
 compileConfig
   :: SerializableConfig
-  -> IO (Either InterpreterError (RunnableConfig Code ProcessorCode))
-compileConfig c = runCompiler c $ do
+  -> IO (Either [T.Text] (RunnableConfig Code ProcessorCode))
+compileConfig c = fmap (either (Left . toLines) Right) $ runCompiler c $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}
+
+toLines :: InterpreterError -> [T.Text]
+toLines err
+  = map T.pack . (prefix:) $ case err of
+      WontCompile es -> concat (map (lines . errMsg) es)
+      es             -> lines (show es)
+  where prefix = "Error when compiling config:"
 
 runCompiler
   :: SerializableConfig -> Compiler a -> IO (Either InterpreterError a)

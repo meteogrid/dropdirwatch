@@ -15,6 +15,7 @@ module System.DirWatch.Config (
   , SerializableWatcher
   , RunnableWatcher
   , RunnableConfig
+  , symbolTable
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
@@ -86,6 +87,8 @@ type RunnableWatcher = Watcher (PreProcessor ProcessorM) Processor
 newtype SymbolTable p
   = SymbolTable (HM.HashMap String p) deriving (Show, Eq, ToJSON, FromJSON)
 
+symbolTable :: [(String, p)] -> SymbolTable p
+symbolTable = SymbolTable . HM.fromList
 
 instance ToJSON SerializableConfig where
   toJSON Config{..}

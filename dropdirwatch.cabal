@@ -39,9 +39,9 @@ library
                      , System.DirWatch.PreProcessor
                      , System.DirWatch.Processor
                      , System.DirWatch.ShellEnv
+                     , System.DirWatch.Interpreter
   other-modules:       System.DirWatch.Config
                      , System.DirWatch.Logging
-                     , System.DirWatch.Interpreter
                      , System.DirWatch.Threading
                      , System.DirWatch.Watcher
                      , System.DirWatch.Util
