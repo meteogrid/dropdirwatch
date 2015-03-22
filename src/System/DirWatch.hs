@@ -10,7 +10,6 @@ module System.DirWatch (
   , compileWith
   , mainWithCompiler
   , symbolTable
-  , mkPlugin
   , def
 ) where
 
@@ -21,10 +20,9 @@ import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Control.Concurrent.MVar (newMVar, readMVar, modifyMVar_, tryPutMVar)
 import Control.Exception (finally)
+import Data.Aeson (FromJSON, Object)
 import Data.Default (def)
 import Data.Monoid ((<>))
-import Data.Aeson (FromJSON(parseJSON), Value(Object))
-import Data.Aeson.Types (parseEither)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T (Text, unlines)
 import Data.Yaml (decodeFileEither)
@@ -146,14 +144,10 @@ installSignalHandlers stopCond interrupted = do
 wasInterrupted :: MVar Int -> IO Bool
 wasInterrupted = fmap (>0) . readMVar
 
-
-type PolyProcessor = Value -> Either String Processor
-type PolyPreProcessor = Value -> Either String (PreProcessor ProcessorM)
-
 compileWith
   :: Monad m
-  => SymbolTable PolyProcessor
-  -> SymbolTable PolyPreProcessor
+  => SymbolTable (Object -> Either String Processor)
+  -> SymbolTable (Object -> Either String (PreProcessor ProcessorM))
   -> SerializableConfig
   -> (m (Either [T.Text] (RunnableConfig Code ProcessorCode)))
 compileWith processors preprocessors c@Config{..}
@@ -186,7 +180,7 @@ compileWith processors preprocessors c@Config{..}
         InterpretedPlugin{} -> throwE ["Cannot interpret plugins"]
         LoadedPlugin{..} ->
           case HM.lookup codeSymbol syms of
-            Just obj -> case obj (Object codeParams) of
+            Just obj -> case obj codeParams of
                           Right v -> return v
                           Left e  -> throwE $ [fromStrings [
                                         "Could not parse config for "
@@ -200,13 +194,3 @@ compileWith processors preprocessors c@Config{..}
       case HM.lookup name syms of
           Nothing   -> throwE [fromStrings ["Unresolved symbol: ", show name]]
           Just code -> func code
-
-mkPlugin
-  :: FromJSON a
-  => String -> (a -> b) -> (String, Value -> Either String b)
-mkPlugin name func = (name, func')
-  where
-    func' config
-      = case parseEither parseJSON config of
-          Right v -> Right (func v)
-          Left  e -> Left e

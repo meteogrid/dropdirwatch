@@ -16,6 +16,7 @@ import Control.Monad.Trans (lift)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.Typeable (Typeable)
+import Data.Aeson (Object)
 import Language.Haskell.Interpreter (
     InterpreterT
   , InterpreterError (..)
@@ -127,16 +128,12 @@ compileCode spec = Compiler $ do
         Left e -> fail $ concat ["Error when compiling ", codeSymbol, ": ", e]
 
 compilePlugin
-  :: (Typeable t, Typeable b)
-  => String -> t -> InterpreterT (ReaderT SerializableConfig IO) b
+  :: Typeable a
+  => String -> Object -> InterpreterT (ReaderT SerializableConfig IO) a
 compilePlugin symbol params = do
   globalImports <- lift $ asks cfgImports
   setModuleImports $ concat [pluginImports, globalImports]
-  let cmd = concat [ "\\c -> case parseEither parseJSON (Object c) of {"
-                   , "          Right v -> Right (", symbol, " v);     "
-                   , "          Left e  -> Left e;                     "
-                   , "          }                                      "
-                   ]
+  let cmd = "mkPlugin " ++ symbol
   ePartialPlugin <- interpret cmd as
   return (ePartialPlugin params)
 
@@ -148,9 +145,7 @@ setModuleImports = setImportsQ . map unModuleImport
 
 pluginImports :: [ModuleImport]
 pluginImports = [
-    ModuleImport ("Data.Aeson", Nothing)
-  , ModuleImport ("Data.Aeson.Types", Nothing)
-  , ModuleImport ("System.DirWatch.PluginAPI", Nothing)
+    ModuleImport ("System.DirWatch.PluginAPI", Nothing)
   , ModuleImport ("Data.HashMap.Strict", Nothing)
   , ModuleImport ("Data.Text", Nothing)
   , ModuleImport ("Data.ByteString", Nothing)

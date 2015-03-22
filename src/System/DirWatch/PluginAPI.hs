@@ -9,6 +9,7 @@ module System.DirWatch.PluginAPI (
   , toStrictByteStringC
   , formatTime
   , formattedCurrentTime
+  , mkPlugin
   , module System.DirWatch.Processor
   , module System.DirWatch.PreProcessor
   , module System.DirWatch.ShellEnv
@@ -29,6 +30,7 @@ import Control.Monad (liftM)
 import Data.Monoid (mempty, mappend, (<>))
 import Data.Aeson (
     FromJSON (..)
+  , Object
   , Value (..)
   , (.:)
   , (.:?)
@@ -42,8 +44,8 @@ import System.DirWatch.Processor hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor hiding (runPreProcessor)
 import System.DirWatch.ShellEnv (envSet, envAppend)
 import System.DirWatch.Logging (logDebug, logInfo, logWarn, logError)
+import Data.Aeson.Types (parseEither)
 import Data.ByteString (ByteString)
-
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
 
@@ -98,3 +100,11 @@ instance FromJSON NoArgs where
 
 noArgs :: NoArgs
 noArgs = NoArgs ()
+
+mkPlugin
+  :: FromJSON a
+  => (a -> b) -> Object -> Either String b
+mkPlugin func config
+  = case parseEither parseJSON (Object config) of
+      Right v -> Right (func v)
+      Left  e -> Left e
