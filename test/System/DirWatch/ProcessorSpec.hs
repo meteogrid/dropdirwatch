@@ -5,7 +5,6 @@ import Test.Hspec
 import System.DirWatch.PluginAPI
 import System.DirWatch.Processor (runProcessorM)
 import Data.ByteString.Char8 as BS
-import Data.Default (def)
 
 main :: IO ()
 main = hspec spec
@@ -14,7 +13,7 @@ spec :: Spec
 spec = do
   describe "exceptions" $ do
     it "handles normal exceptions" $ do
-      result <- runProcessorM def $ error "foo"
+      result <- runProcessorM def undefined $ error "foo"
       case result of
         Left (ProcessorException e) -> show e `shouldBe` "foo"
         _ -> expectationFailure "Expected to catch error"
@@ -22,14 +21,14 @@ spec = do
     it "can catch normal exceptions" $ do
       let handleEx (ProcessorException e) = return $ show e == "foo"
           handleEx _                    = return False
-      result <- runProcessorM def $ (error "foo") `catchE` handleEx
+      result <- runProcessorM def undefined $ (error "foo") `catchE` handleEx
       case result of
         Right True -> return ()
         e -> expectationFailure $ "Unexpected result: " ++ show e
 
   describe "executeShellCmd" $ do
     it "can execute simple shell command" $ do
-      eResult <- runProcessorM def $ executeShellCmd (shellCmd "ls")
+      eResult <- runProcessorM def undefined $ executeShellCmd (shellCmd "ls")
       case eResult of 
         Left e -> expectationFailure $ "Unexpected shell error: " ++ show e
         Right (stdout, stderr) -> do
@@ -39,7 +38,7 @@ spec = do
     it "can use environment variables in command" $ do
       let cmd = (shellCmd "echo -n $FOO") {shEnv=env}
           env = envSet "FOO" "bar" mempty
-      eResult <- runProcessorM def $ executeShellCmd cmd
+      eResult <- runProcessorM def undefined $ executeShellCmd cmd
       case eResult of 
         Left e -> expectationFailure $ "Unexpected shell error: " ++ show e
         Right (stdout, stderr) -> do
