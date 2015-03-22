@@ -29,6 +29,7 @@ module System.DirWatch.Processor (
   , runProcessorM
   , throwE
   , catchE
+  , def
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
@@ -56,6 +57,7 @@ import qualified Control.Monad.Trans.Except as E
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Conduit (Conduit, ConduitM, Source, ($$))
 import Data.Conduit.Binary (sinkHandle)
+import Data.Time (UTCTime)
 import qualified Data.Text as T (unpack)
 import Data.Text.Encoding (decodeUtf8')
 import Data.ByteString (ByteString)
@@ -72,6 +74,7 @@ import System.DirWatch.Logging (
   , logError
   , fromStrings
   )
+import System.DirWatch.Types (HasCurrentTime(..))
 import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
 import qualified System.DirWatch.Threading as Th
@@ -106,6 +109,7 @@ data ProcessorEnv
     , pProcs     :: IORef [ProcessHandle]
     , pThreads   :: IORef [SomeThreadHandle ProcessorError]
     , pWorkSpace :: FilePath
+    , pCurTime   :: UTCTime
     }
 
 
@@ -140,6 +144,8 @@ instance (MonadReader ProcessorConfig) ProcessorM where
     let env' = env {pConfig = f (pConfig env)}
     liftIO (runProcessorEnv env' act) >>= restoreM
     
+instance HasCurrentTime ProcessorM where
+  getTime = ProcessorM (asks pCurTime)
 
 instance MonadBaseControl IO ProcessorM where
    type StM ProcessorM a = Either ProcessorError a
@@ -149,11 +155,11 @@ instance MonadBaseControl IO ProcessorM where
    restoreM = either throwE return
 
 runProcessorM
-  :: ProcessorConfig -> ProcessorM a -> IO (Either ProcessorError a)
-runProcessorM cfg act
+  :: ProcessorConfig -> UTCTime -> ProcessorM a -> IO (Either ProcessorError a)
+runProcessorM cfg time act
   = withSystemTempDirectory ".dropdirwatch-processor" $ \workSpace -> do
       env <- ProcessorEnv <$> pure cfg <*> newIORef [] <*> newIORef []
-                          <*> pure workSpace
+                          <*> pure workSpace <*> pure time
       finally (runProcessorEnv env act) (cleanup env)
   where
     cleanup env = finally

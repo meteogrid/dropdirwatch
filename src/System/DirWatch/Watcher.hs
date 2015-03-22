@@ -342,11 +342,12 @@ runWatchersOnFile watchers filename = do
   cfg <- processorConfig
   chan <- asks wChan
   start <- liftIO getPOSIXTime
+  let time = posixSecondsToUTCTime start
   numRetries <- askConfig cfgNumRetries
   retryInterval <- askConfig cfgRetryInterval
   fps <- forM watchers $ \w -> do
     let process n = do
-          result <- runProcessorM cfg $ processWatcher startUTC filename w
+          result <- runProcessorM cfg time $ processWatcher startUTC filename w
           case (result, n<=numRetries) of
             (Left e, True) -> do
               runStderrLoggingT $ $(logWarn) $ fromStrings $

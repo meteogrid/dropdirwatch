@@ -25,6 +25,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Time (UTCTime)
 import Data.Conduit (Conduit, Source, (=$=), ($$))
 import qualified Data.Conduit.Binary as CB
+import System.DirWatch.Types (HasCurrentTime(..))
 
 type PreProcessor m = FilePath -> PreProcessorT m ()
 
@@ -51,8 +52,8 @@ runPreProcessor source time
   = flip runReaderT env . execWriterT . unPreProcessorT
   where env = PreProcessorEnv {ppeTime=time, ppeSource=source}
 
-getTime :: Monad m => PreProcessorT m UTCTime
-getTime = PreProcessorT (asks ppeTime)
+instance Monad m => HasCurrentTime (PreProcessorT m) where
+  getTime = PreProcessorT (asks ppeTime)
 
 getSource :: Monad m => PreProcessorT m (Source m ByteString)
 getSource = PreProcessorT (asks ppeSource)

@@ -37,13 +37,15 @@ import Data.Aeson (
   , (.!=)
   )
 import Data.Conduit (Conduit, Source, (=$=), ($$), await, yield)
-import Data.Conduit.Binary (sourceLbs, sinkLbs)
+import Data.Conduit.Binary (sourceLbs, sinkLbs, sourceFile, sinkFile)
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.Posix
 import System.DirWatch.Processor hiding (ProcessorConfig, runProcessorM)
 import System.DirWatch.PreProcessor hiding (runPreProcessor)
+import System.DirWatch.Types (HasCurrentTime(..))
 import System.DirWatch.ShellEnv (envSet, envAppend)
-import System.DirWatch.Logging (logDebug, logInfo, logWarn, logError)
+import System.DirWatch.Logging (
+  fromStrings, logDebug, logInfo, logWarn, logError)
 import Data.Aeson.Types (parseEither)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS
@@ -87,7 +89,7 @@ toStrictByteStringC = go []
 formatTime :: F.FormatTime t => String -> t -> String
 formatTime = F.formatTime defaultTimeLocale
 
-formattedCurrentTime :: Monad m => String -> PreProcessorT m String
+formattedCurrentTime :: HasCurrentTime m => String -> m String
 formattedCurrentTime fmt = liftM (formatTime fmt) getTime
 
 newtype NoArgs = NoArgs ()

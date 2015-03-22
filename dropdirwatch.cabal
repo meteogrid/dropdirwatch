@@ -42,6 +42,7 @@ library
                      , System.DirWatch.Interpreter
   other-modules:       System.DirWatch.Config
                      , System.DirWatch.Logging
+                     , System.DirWatch.Types
                      , System.DirWatch.Threading
                      , System.DirWatch.Watcher
                      , System.DirWatch.Util
