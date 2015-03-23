@@ -56,12 +56,12 @@ options = Options
          <> short 'r'
          <> help "Wheter to reload the configuration/plugins when modified")
       <*> option auto
-          ( long "--log-level"
+          ( long "log-level"
          <> short 'l'
          <> help "Priority for the log messages that go to stderr"
          <> value INFO)
       <*> option auto
-          ( long "--syslog-level"
+          ( long "syslog-level"
          <> help "Priority for the log messages that go to syslog"
          <> value ERROR)
 
