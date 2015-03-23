@@ -307,27 +307,31 @@ retryText num
 
 archiveFile :: AbsPath -> WatcherM ()
 archiveFile fname = do
-  mArchiveDir <- askConfig cfgArchiveDir
-  case mArchiveDir of
-    Just archiveDir -> do
-      time <- liftIO getCurrentTime
-      let dest = toFilePath (archiveDestination archiveDir (utctDay time) fname)
-          destDir = takeDirectory dest
-      exists <- liftIO $ doesFileExist dest
-      let finalDest
-            | exists    = dest ++ "." ++ show secs
-            | otherwise = dest
-          secs = realToFrac (utctDayTime time) :: Fixed E2
-      result <- liftIO . tryIOError $ do
-        createDirectoryIfMissing True destDir
-        renameFile (toFilePath fname) finalDest
-      case result of
-        Left e -> do
-          $(logWarn) $ concat [ "Could not archive ", show fname, ": "
-                              , show e]
-        Right () ->
-          $(logInfo) $ concat ["Archived ", show fname, " -> ", finalDest]
-    Nothing -> return ()
+  noArchives <- askConfig cfgNoArchives
+  let shouldArchive = all (not . (fname `globMatch`)) noArchives
+  when shouldArchive $ do
+    mArchiveDir <- askConfig cfgArchiveDir
+    case mArchiveDir of
+      Just archiveDir -> do
+        time <- liftIO getCurrentTime
+        let dest = toFilePath
+                     (archiveDestination archiveDir (utctDay time) fname)
+            destDir = takeDirectory dest
+        exists <- liftIO $ doesFileExist dest
+        let finalDest
+              | exists    = dest ++ "." ++ show secs
+              | otherwise = dest
+            secs = realToFrac (utctDayTime time) :: Fixed E2
+        result <- liftIO . tryIOError $ do
+          createDirectoryIfMissing True destDir
+          renameFile (toFilePath fname) finalDest
+        case result of
+          Left e -> do
+            $(logWarn) $ concat [ "Could not archive ", show fname, ": "
+                                , show e]
+          Right () ->
+            $(logInfo) $ concat ["Archived ", show fname, " -> ", finalDest]
+      Nothing -> return ()
 
 
 

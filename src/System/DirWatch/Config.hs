@@ -54,6 +54,7 @@ data Config pp p ppc pc
     , cfgWatchers      :: [Watcher pp p]
     , cfgStableTime    :: NominalDiffTime
     , cfgPackageDbs    :: [GlobPattern]
+    , cfgNoArchives    :: [AbsPath]
     , cfgImports       :: [ModuleImport]
     , cfgProcessors    :: SymbolTable pc
     , cfgPreProcessors :: SymbolTable ppc
@@ -69,6 +70,7 @@ instance Default (Config a b c d) where
       , cfgWatchers      = mempty
       , cfgStableTime    = 60
       , cfgPackageDbs    = mempty
+      , cfgNoArchives    = mempty
       , cfgImports       = mempty
       , cfgProcessors    = SymbolTable HM.empty 
       , cfgPreProcessors = SymbolTable HM.empty
@@ -99,6 +101,7 @@ instance ToJSON SerializableConfig where
     , "watchers"      .= cfgWatchers
     , "stableTime"    .= (realToFrac cfgStableTime :: Double)
     , "packageDbs"    .= cfgPackageDbs
+    , "dontArchive"   .= cfgNoArchives
     , "imports"       .= cfgImports
     , "processors"    .= cfgProcessors
     , "preprocessors" .= cfgPreProcessors
@@ -115,6 +118,7 @@ instance FromJSON SerializableConfig where
       (v .: "watchers" >>= failIfDuplicate "Duplicate watcher" wName) <*>
       maybeDiffTime (v .:? "stableTime") (cfgStableTime def) <*>
       v .:? "packageDbs"    .!= cfgPackageDbs def <*>
+      v .:? "dontArchive"   .!= cfgNoArchives def <*>
       v .:? "imports"       .!= cfgImports def <*>
       v .:? "processors"    .!= cfgProcessors def <*>
       v .:? "preprocessors" .!= cfgPreProcessors def <*>
