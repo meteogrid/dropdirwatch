@@ -8,12 +8,12 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module System.DirWatch.Watcher (
-    WatcherState
-  , StopCond
+    StopCond
   , runWatchLoop
   , mkStopCond
   , endLoop
   , processWatcher
+  , waitForJobsToComplete
 ) where
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
@@ -398,3 +398,25 @@ addToRunning
 addToRunning path fps = do
   ts <- gets wThreads
   modify $ \s -> s {wThreads = insertWith mappend path (initTPP fps) ts}
+
+waitForJobsToComplete :: WatcherState -> IO ()
+waitForJobsToComplete state = do
+  when (length initialThreads > 0) $ do
+    $(logInfo) $ concat [ "Waiting at most ", show maxWait, "s for "
+                        , show (length initialThreads), " threads to complete"]
+    go initialThreads 0
+  where
+    maxWait = 30
+    go :: [SomeThreadHandle a] -> Int -> IO ()
+    go [] _        = return ()
+    go xs  n | n>maxWait = do
+      $(logError) $ concat [show (length xs), " threads have not completed"]
+      return ()
+    go threads n = do
+      when (length threads > 0) $ do
+        stillRunning <- fmap catMaybes $ forM threads $ \t ->
+          tryWaitSomeChild t >>= return . maybe (Just t) (const Nothing)
+        sleep 1
+        go stillRunning (n+1)
+    initialThreads = map rwHandle . concat . map (HS.toList . tRunning) 
+                   . HM.elems . wThreads $ state

@@ -105,15 +105,14 @@ runWithOptions compiler Options{..} = do
 
   eConfig <- finally decodeAndCompile
                      (installSignalHandlers stopCond interrupted)
-  _ <- case eConfig of
+  state <- case eConfig of
     Right initialConfig -> withINotify $ \ino -> do
       when optReload $ do
         watchNewPluginDirs pluginDirs initialConfig
         watchConfig optConfigFile stopCond pluginDirs ino
       mainLoop initialConfig Nothing
     Left err -> logCompileError err >> error "Unable to load config"
-  -- TODO: Cleanup state
-  return ()
+  waitForJobsToComplete state
   where
     decodeAndCompile = do
       ePConfig <- decodeFileEither optConfigFile
