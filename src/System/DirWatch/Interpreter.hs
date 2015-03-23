@@ -1,6 +1,10 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module System.DirWatch.Interpreter (
     runCompiler
   , compileWatcher
@@ -11,7 +15,7 @@ module System.DirWatch.Interpreter (
 
 import Control.Monad (forM)
 import Control.Applicative (Applicative)
-import Control.Monad.Reader (ReaderT(..), asks)
+import Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
 import Control.Monad.Trans (lift)
 import qualified Data.HashMap.Strict as HM
 import Data.Typeable (Typeable)
@@ -52,10 +56,17 @@ newtype Compiler a
       unCompiler :: InterpreterT (ReaderT SerializableConfig IO) a
   } deriving (Functor, Applicative, Monad)
 
-compileConfig
-  :: SerializableConfig
+instance (MonadReader SerializableConfig) Compiler where
+  ask = Compiler (lift  ask)
+
+compileConfig = compileWith runCompiler
+
+compileWith
+  :: (SerializableConfig -> Compiler (RunnableConfig Code ProcessorCode)
+      -> IO (Either [String] (RunnableConfig Code ProcessorCode)))
+  -> SerializableConfig
   -> IO (Either [String] (RunnableConfig Code ProcessorCode))
-compileConfig c = fmap (either (Left . toLines) Right) $ runCompiler c $ do
+compileWith f c = f c $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}
 
@@ -67,68 +78,70 @@ toLines err
   where prefix = "Error when compiling config:"
 
 runCompiler
-  :: SerializableConfig -> Compiler a -> IO (Either InterpreterError a)
+  :: SerializableConfig -> Compiler a -> IO (Either [String] a)
 runCompiler c act = do
   pkgDbDirs <- fmap concat $ mapM namesMatching (cfgPackageDbs c)
   let args = ["-package-db="++d | d <-pkgDbDirs]
-  flip runReaderT c . unsafeRunInterpreterWithArgs args $ unCompiler act
+  fmap (either (Left . toLines) Right)
+    . flip runReaderT c
+    . unsafeRunInterpreterWithArgs args
+    $ unCompiler act
 
 
-compileWatcher :: SerializableWatcher -> Compiler RunnableWatcher
 compileWatcher w = do
-  paths <- forM (wPaths w) $ \wp@WatchedPath{..} -> do
-             pp <- case wpPreprocessor of
-                     Nothing -> return Nothing
-                     Just pp -> fmap Just $
-                       compileSymOrCodeWith cfgPreProcessors compileCode pp
-             return wp {wpPreprocessor=pp}
+  paths <- mapM compilePath (wPaths w)
   mP <- case wProcessor w of
           Nothing -> return Nothing
-          Just p  -> fmap Just $
-            compileSymOrCodeWith cfgProcessors compileProcessor p
+          Just p  -> fmap Just $ do
+            syms <- asks cfgProcessors
+            compileSymOrCodeWith syms compileProcessor p
   return $ w {wPaths=paths, wProcessor=mP}
 
-compileSymOrCodeWith
-  :: (SerializableConfig -> SymbolTable t)
-  -> (t -> Compiler b) -> SymOrCode t -> Compiler b
+compilePath wp = do
+  pp' <- case wpPreprocessor wp of
+    Just pp ->
+      fmap Just $ do
+        syms <- asks cfgPreProcessors
+        compileSymOrCodeWith syms compileCode pp
+    Nothing -> return Nothing
+  return $ wp {wpPreprocessor=pp'}
+
 compileSymOrCodeWith _ func (SymCode code)         = func code
-compileSymOrCodeWith symGetter func (SymName name) = do
-  SymbolTable syms <- Compiler $ lift $ asks symGetter
+compileSymOrCodeWith (SymbolTable syms) func (SymName name) = do
   case HM.lookup name syms of
       Nothing   -> fail ("Unresolved symbol: " ++ name)
       Just code -> func code
 
 
-compileProcessor :: ProcessorCode -> Compiler Processor
 compileProcessor (ProcessorCode code)  = compileCode code
 compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
 
-compileCode :: forall a. Typeable a => Code -> Compiler a
-compileCode spec = Compiler $ do
-  sp <- lift $ asks cfgPluginDirs
-  globalImports <- lift $ asks cfgImports
-  set [searchPath := sp]
-  case spec of
-    EvalCode{..} -> do
-      setModuleImports $ concat [pluginImports, globalImports, codeImports]
-      interpret codeEval as
-    InterpretedPlugin{..} -> do
-      loadModules [codeModule]
-      setTopLevelModules [codeModule]
-      ePlugin <- compilePlugin codeSymbol codeParams
-      case ePlugin of 
-        Right o -> return o
-        Left e -> fail $ concat ["Error when compiling ", codeModule, ":"
-                                , codeSymbol, ": ", e]
-    LoadedPlugin{..} -> do
-      ePlugin <- compilePlugin codeSymbol codeParams
-      case ePlugin of 
-        Right o -> return o
-        Left e -> fail $ concat ["Error when compiling ", codeSymbol, ": ", e]
+class MonadReader SerializableConfig m => CompilesCode m where
+  compileCode :: Typeable a => Code -> m a
 
-compilePlugin
-  :: Typeable a
-  => String -> Object -> InterpreterT (ReaderT SerializableConfig IO) a
+instance CompilesCode Compiler where
+  compileCode spec = Compiler $ do
+    sp <- lift $ asks cfgPluginDirs
+    set [searchPath := sp]
+    case spec of
+      EvalCode{..} -> do
+        globalImports <- lift $ asks cfgImports
+        setModuleImports $ concat [pluginImports, globalImports, codeImports]
+        interpret codeEval as
+      InterpretedPlugin{..} -> do
+        loadModules [codeModule]
+        setTopLevelModules [codeModule]
+        ePlugin <- compilePlugin codeSymbol codeParams
+        case ePlugin of 
+          Right o -> return o
+          Left e -> fail $ concat ["Error when compiling ", codeModule, ":"
+                                  , codeSymbol, ": ", e]
+      LoadedPlugin{..} -> do
+        ePlugin <- compilePlugin codeSymbol codeParams
+        case ePlugin of 
+          Right o -> return o
+          Left e -> fail $ concat ["Error when compiling ", codeSymbol, ": ", e]
+
 compilePlugin symbol params = do
   globalImports <- lift $ asks cfgImports
   setModuleImports $ concat [pluginImports, globalImports]
@@ -137,8 +150,6 @@ compilePlugin symbol params = do
   return (ePartialPlugin params)
 
 
-setModuleImports
-  :: [ModuleImport] -> InterpreterT (ReaderT SerializableConfig IO) ()
 setModuleImports = setImportsQ . map unModuleImport
 
 
