@@ -62,10 +62,10 @@ instance (MonadReader SerializableConfig) Compiler where
 compileConfig = compileWith runCompiler
 
 compileWith
-  :: (SerializableConfig -> Compiler (RunnableConfig Code ProcessorCode)
-      -> IO (Either [String] (RunnableConfig Code ProcessorCode)))
+  :: (SerializableConfig -> Compiler RunnableConfig
+    -> IO (Either [String] RunnableConfig))
   -> SerializableConfig
-  -> IO (Either [String] (RunnableConfig Code ProcessorCode))
+  -> IO (Either [String] RunnableConfig)
 compileWith f c = f c $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}

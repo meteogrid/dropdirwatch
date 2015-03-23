@@ -68,7 +68,7 @@ options = Options
 
 mainWithCompiler
   :: FromJSON a
-  => (a -> IO (Either [String] (RunnableConfig ppc pc)))
+  => (a -> IO (Either [String] RunnableConfig))
   -> [InfoMod Options]
   -> IO ()
 mainWithCompiler compiler infoOpts = do
@@ -80,7 +80,7 @@ mainWithCompiler compiler infoOpts = do
 
 runWithOptions
   :: FromJSON a
-  => (a -> IO (Either [String] (RunnableConfig ppc pc))) -> Options -> IO ()
+  => (a -> IO (Either [String] RunnableConfig)) -> Options -> IO ()
 runWithOptions compiler Options{..} = do
   stopCond <- mkStopCond
   pluginDirs <- newEmptyMVar
@@ -170,7 +170,7 @@ compileWith
   => SymbolTable (Object -> Either String Processor)
   -> SymbolTable (Object -> Either String (PreProcessor ProcessorM))
   -> SerializableConfig
-  -> (m (Either [String] (RunnableConfig Code ProcessorCode)))
+  -> (m (Either [String] RunnableConfig))
 compileWith processors preprocessors c@Config{..}
   = return . runExcept $ do
       watchers' <- mapM compileWatcher cfgWatchers

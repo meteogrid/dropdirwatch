@@ -82,8 +82,8 @@ type SerializableConfig
   = Config (SymOrCode Code) (SymOrCode ProcessorCode)
            Code             ProcessorCode
 type SerializableWatcher = Watcher (SymOrCode Code) (SymOrCode ProcessorCode)
-type RunnableConfig ppc pc
-  = Config (PreProcessor ProcessorM) Processor ppc pc
+type RunnableConfig
+  = Config (PreProcessor ProcessorM) Processor Code ProcessorCode
 type RunnableWatcher = Watcher (PreProcessor ProcessorM) Processor
 
 newtype SymbolTable p

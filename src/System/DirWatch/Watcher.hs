@@ -4,8 +4,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module System.DirWatch.Watcher (
     StopCond
@@ -112,15 +110,15 @@ data ChanMessage
   | Finish
 
 data WatcherEnv
-  = forall a b. WatcherEnv {
-      wConfig   :: RunnableConfig a b
+  = WatcherEnv {
+      wConfig   :: RunnableConfig
     , wChan     :: Chan ChanMessage
     , wInotify  :: INotify
     , wDirMap   :: DirMap
   }
 
-askConfig :: (forall pc ppc. RunnableConfig pc ppc -> a) -> WatcherM a
-askConfig f = ask >>= \(WatcherEnv c _ _ _) -> return (f c)
+askConfig :: (RunnableConfig -> a) -> WatcherM a
+askConfig f = asks (f . wConfig) 
 
 
 data WatcherState
@@ -154,7 +152,7 @@ runWatcherEnv env state
   . unWatcherM
 
 runWatchLoop
-  :: RunnableConfig a b -> Maybe WatcherState -> StopCond -> IO WatcherState
+  :: RunnableConfig -> Maybe WatcherState -> StopCond -> IO WatcherState
 runWatchLoop cfg mState stopCond = withINotify $ \ino -> do
   let dirMap = mkDirMap (cfgWatchers cfg)
   env <- WatcherEnv <$> pure cfg <*> newChan <*> pure ino <*> pure dirMap
