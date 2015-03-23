@@ -7,11 +7,11 @@
 {-# LANGUAGE TypeFamilies #-}
 module System.DirWatch.Interpreter (interpretConfig) where
 
-import Control.Monad (liftM)
 import Control.Applicative (Applicative)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
 import Control.Monad.Trans (lift)
-import qualified Data.HashMap.Strict as HM
+import Control.Monad.Catch (MonadThrow(throwM), MonadCatch)
 import Language.Haskell.Interpreter (
     InterpreterT
   , InterpreterError (..)
@@ -29,44 +29,35 @@ import Language.Haskell.Interpreter.Unsafe (unsafeRunInterpreterWithArgs)
 import System.DirWatch.Config (
     Config(..)
   , ConfigCompiler (..)
+  , ConfigCompilerError (..)
   , CompilerEnv (..)
-  , Watcher(..)
-  , WatchedPath (..)
-  , SymOrCode (..)
-  , SymbolTable (..)
   , ModuleImport (..)
-  , SerializableConfig
-  , SerializableWatcher
   , RunnableConfig
-  , RunnableWatcher
+  , SerializableConfig
   , Code (..)
-  , ProcessorCode (..)
   , compileConfig
   )
-import System.DirWatch.Processor (Processor)
 import System.FilePath.GlobPattern (GlobPattern)
 import System.FilePath.Glob (namesMatching)
 
 newtype HintCompiler a
   = HintCompiler {
       unHintCompiler :: InterpreterT (ReaderT (CompilerEnv HintCompiler) IO) a
-  } deriving (Functor, Applicative, Monad)
+  } deriving (Functor, Applicative, Monad, MonadThrow, MonadCatch)
 
 instance (MonadReader (CompilerEnv HintCompiler)) HintCompiler where
   ask = HintCompiler (lift  ask)
+  local f act = asks f >>= HintCompiler . liftIO . flip runCompiler act
 
-interpretConfig :: SerializableConfig -> IO (Either [String] RunnableConfig)
-interpretConfig cfg@Config{..} = compileConfig env cfg
+interpretConfig
+  :: SerializableConfig -> IO (Either ConfigCompilerError RunnableConfig)
+interpretConfig cfg@Config{..} = compileConfig cc cfg
   where
-    env = CompilerEnv {
-            ceProcessors = cfgProcessors
-          , cePreProcessors = cfgPreProcessors
-          , ceConfig = HintCompilerConfig {
-              ccGlobalImports = cfgImports
-            , ccPluginDirs    = cfgPluginDirs
-            , ccPackageDbs    = cfgPackageDbs
-            }
-          }
+    cc = HintCompilerConfig {
+           ccGlobalImports = cfgImports
+         , ccPluginDirs    = cfgPluginDirs
+         , ccPackageDbs    = cfgPackageDbs
+         }
 
 
 instance ConfigCompiler HintCompiler where
@@ -81,10 +72,10 @@ instance ConfigCompiler HintCompiler where
     let packageDbs = ccPackageDbs (ceConfig env)
     pkgDbDirs <- fmap concat $ mapM namesMatching packageDbs
     let args = ["-package-db="++d | d <-pkgDbDirs]
-    fmap (either (Left . toLines) Right)
-      . flip runReaderT env
-      . unsafeRunInterpreterWithArgs args
-      $ unHintCompiler act
+    eResult <- flip runReaderT env
+             . unsafeRunInterpreterWithArgs args
+             $ unHintCompiler act
+    either (throwM . ConfigCompilerError . toLines) return eResult
 
   compileCode spec = HintCompiler $ do
     sp <- lift $ asks (ccPluginDirs . ceConfig)
@@ -124,6 +115,8 @@ toLines err
   where prefix = "Error when compiling config:"
 
 
+setModuleImports
+  :: [ModuleImport] -> InterpreterT (ReaderT (CompilerEnv HintCompiler) IO) ()
 setModuleImports = setImportsQ . map unModuleImport
 
 

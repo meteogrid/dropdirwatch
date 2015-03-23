@@ -4,9 +4,11 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 module System.DirWatch.Config (
     Config (..)
   , ConfigCompiler (..)
+  , ConfigCompilerError (..)
   , CompilerEnv (..)
   , Watcher (..)
   , WatchedPath (..)
@@ -24,8 +26,11 @@ module System.DirWatch.Config (
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
+import Control.Exception (Exception)
 import Control.Monad (foldM_, liftM)
+import Control.Monad.Catch (MonadThrow(..), MonadCatch(..), try)
 import Control.Monad.Reader (MonadReader, asks)
+import Data.Yaml (ParseException)
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -310,23 +315,28 @@ data CompilerEnv m
   }
 
 
-class (Monad (CompilerMonad m), MonadReader (CompilerEnv m) m)
+class ( Monad (CompilerMonad m)
+      , MonadReader (CompilerEnv m) m
+      , MonadThrow m
+      , MonadCatch m)
   => ConfigCompiler m where
   data CompilerConfig m  :: *
   type CompilerMonad m   :: * -> *
 
   compileCode :: Typeable a => Code -> m a
-  runCompiler :: CompilerEnv m -> m a -> CompilerMonad m (Either [String] a)
+  runCompiler :: CompilerEnv m -> m a -> CompilerMonad m a
 
 
 compileConfig
   :: ConfigCompiler m
-  => CompilerEnv m
+  => CompilerConfig m
   -> SerializableConfig
-  -> CompilerMonad m (Either [String] RunnableConfig)
-compileConfig env c = runCompiler env $ do
+  -> CompilerMonad m (Either ConfigCompilerError RunnableConfig)
+compileConfig cc c = runCompiler env $ try $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}
+  where
+    env = CompilerEnv (cfgPreProcessors c) (cfgProcessors c) cc
 
 
 compileWatcher
@@ -336,10 +346,8 @@ compileWatcher
 compileWatcher w = do
   paths <- mapM compilePath (wPaths w)
   mP <- case wProcessor w of
-          Nothing -> return Nothing
-          Just p  -> liftM Just $ do
-            syms <- asks ceProcessors
-            compileSymOrCodeWith syms compileProcessor p
+    Nothing -> return Nothing
+    Just p  -> liftM Just $ compileSymOrCodeWith ceProcessors compileProcessor p
   return $ w {wPaths=paths, wProcessor=mP}
 
 compilePath
@@ -348,21 +356,27 @@ compilePath
   -> m (WatchedPath pp)
 compilePath wp = do
   pp' <- case wpPreprocessor wp of
-    Just pp ->
-      liftM Just $ do
-        syms <- asks cePreProcessors
-        compileSymOrCodeWith syms compileCode pp
+    Just pp -> liftM Just $ compileSymOrCodeWith cePreProcessors compileCode pp
     Nothing -> return Nothing
   return $ wp {wpPreprocessor=pp'}
 
 compileSymOrCodeWith
-  :: Monad m => SymbolTable t -> (t -> m a) -> SymOrCode t -> m a
-compileSymOrCodeWith _ func (SymCode code) = func code
-compileSymOrCodeWith (SymbolTable syms) func (SymName name) = do
+  :: ConfigCompiler m
+  => (CompilerEnv m -> SymbolTable t) -> (t -> m b) -> SymOrCode t -> m b
+compileSymOrCodeWith _         func (SymCode code) = func code
+compileSymOrCodeWith symGetter func (SymName name) = do
+  SymbolTable syms <- asks symGetter
   case HM.lookup name syms of
-      Nothing   -> fail ("Unresolved symbol: " ++ name)
+      Nothing   -> throwM $ UnresolvedSymbol name
       Just code -> func code
 
+data ConfigCompilerError
+  = UnresolvedSymbol    String
+  | ConfigCompilerError [String]
+  | ParseError          ParseException
+  deriving (Typeable, Show)
+
+instance Exception ConfigCompilerError
 
 compileProcessor
   :: ConfigCompiler m => ProcessorCode -> m Processor

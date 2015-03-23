@@ -1,6 +1,11 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module System.DirWatch (
     Config (..)
   , Options (..)
@@ -17,7 +22,8 @@ module System.DirWatch (
 
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Monad (when, void)
-import Control.Monad.Trans.Except (runExcept, throwE)
+import Control.Monad.Reader (MonadReader, ReaderT(..), asks)
+import Control.Monad.Catch (MonadThrow(..), MonadCatch(..))
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Control.Concurrent.MVar (newMVar, readMVar, modifyMVar_, tryPutMVar)
@@ -25,6 +31,7 @@ import Control.Exception (finally)
 import Data.Aeson (FromJSON, Object)
 import Data.Default (def)
 import Data.Monoid (mconcat)
+import Data.Typeable (Typeable, cast)
 import qualified Data.HashMap.Strict as HM
 import Data.Yaml (decodeFileEither)
 import System.INotify
@@ -33,7 +40,7 @@ import System.DirWatch.Logging (Priority(..), setupLogging, logInfo, logError)
 import System.DirWatch.Config
 import System.DirWatch.Watcher
 import System.DirWatch.PreProcessor (PreProcessor)
-import System.DirWatch.Processor (Processor, ProcessorM, shellProcessor)
+import System.DirWatch.Processor (Processor, ProcessorM)
 import Options.Applicative
 
 data Options
@@ -68,7 +75,7 @@ options = Options
 
 mainWithCompiler
   :: FromJSON a
-  => (a -> IO (Either [String] RunnableConfig))
+  => (a -> IO (Either ConfigCompilerError RunnableConfig))
   -> [InfoMod Options]
   -> IO ()
 mainWithCompiler compiler infoOpts = do
@@ -80,7 +87,7 @@ mainWithCompiler compiler infoOpts = do
 
 runWithOptions
   :: FromJSON a
-  => (a -> IO (Either [String] RunnableConfig)) -> Options -> IO ()
+  => (a -> IO (Either ConfigCompilerError RunnableConfig)) -> Options -> IO ()
 runWithOptions compiler Options{..} = do
   stopCond <- mkStopCond
   pluginDirs <- newEmptyMVar
@@ -118,7 +125,7 @@ runWithOptions compiler Options{..} = do
       ePConfig <- decodeFileEither optConfigFile
       case ePConfig of
         Right pConfig -> compiler pConfig
-        Left e -> return . Left $ [concat ["Could not parse YAML: ", show e]]
+        Left e        -> return . Left . ParseError $ e
 
 watchNewPluginDirs
   :: MonadIO m => MVar [FilePath] -> Config pp p ppc pc -> m ()
@@ -149,8 +156,13 @@ watchConfig configFile stopCond pluginDirs ino = do
 whenM :: Monad m => m Bool -> m () -> m ()
 whenM cond act = cond >>= flip when act
 
-logCompileError :: MonadIO m => [String] -> m ()
-logCompileError = $(logError) . ("\n"<>) . unlines
+logCompileError :: MonadIO m => ConfigCompilerError -> m ()
+logCompileError (ParseError err)
+  = $(logError) $ "Error when parsing YAML: " ++ show err
+logCompileError (UnresolvedSymbol sym)
+  = $(logError) $ "Unresolved symbol: " ++ show sym
+logCompileError (ConfigCompilerError errs)
+  = $(logError) $ ('\n':(unlines errs))
 
 
 installSignalHandlers :: StopCond -> MVar Int -> IO ()
@@ -165,53 +177,54 @@ installSignalHandlers stopCond interrupted = do
 wasInterrupted :: MVar Int -> IO Bool
 wasInterrupted = fmap (>0) . readMVar
 
+newtype StaticResolver m a
+  = StaticResolver {
+      unStaticResolver :: ReaderT (CompilerEnv (StaticResolver m)) m a
+      }
+  deriving ( Functor, Applicative, Monad, MonadThrow, MonadCatch
+           , MonadReader (CompilerEnv (StaticResolver m)))
+
+instance (Functor m, Applicative m, Monad m, MonadThrow m, MonadCatch m)
+  => ConfigCompiler (StaticResolver m) where
+  type CompilerMonad (StaticResolver m) = m
+  data CompilerConfig (StaticResolver m) = StaticResolverConfig
+         (SymbolTable (Object -> Either String Processor))
+         (SymbolTable (Object -> Either String (PreProcessor ProcessorM)))
+  runCompiler env = flip runReaderT env . unStaticResolver
+  compileCode :: forall a. Typeable a => Code -> StaticResolver m a
+  compileCode spec =
+    case spec of
+      EvalCode{}
+        -> throwM $ ConfigCompilerError ["Cannot evaluate code"]
+      InterpretedPlugin{}
+        -> throwM $ ConfigCompilerError ["Cannot interpret plugins"]
+      LoadedPlugin{..} -> do
+        StaticResolverConfig
+          (SymbolTable processors) (SymbolTable preprocessors) <- asks ceConfig
+        case cast (HM.lookup codeSymbol processors) of
+          Just obj -> applyParams obj codeSymbol codeParams
+          Nothing  -> case cast (HM.lookup codeSymbol preprocessors) of
+            Just obj -> applyParams obj codeSymbol codeParams
+            Nothing  -> throwM $ ConfigCompilerError ["Should not happen"]
+    where 
+      applyParams
+        :: Maybe (Object -> Either String a) -> String -> Object
+        -> StaticResolver m a
+      applyParams (Just obj) sym params =
+        case obj params of
+          Right v -> return v
+          Left e  -> throwM $ ConfigCompilerError $
+            [concat [ "Could not parse config for ", show sym, ": ", show e]]
+      applyParams Nothing sym _ =
+        throwM $ ConfigCompilerError $
+          [concat ["Plugin ", show sym, " is not defined"]]
+
 compileWith
-  :: Monad m
+  :: ConfigCompiler (StaticResolver m)
   => SymbolTable (Object -> Either String Processor)
   -> SymbolTable (Object -> Either String (PreProcessor ProcessorM))
   -> SerializableConfig
-  -> (m (Either [String] RunnableConfig))
-compileWith processors preprocessors c@Config{..}
-  = return . runExcept $ do
-      watchers' <- mapM compileWatcher cfgWatchers
-      return $ c {cfgWatchers=watchers'}
-  where
-    compileWatcher w = do
-      paths <- mapM compilePath (wPaths w)
-      processor <- case wProcessor w of
-        Nothing -> return Nothing
-        Just p  ->
-          fmap Just $ compileSymOrCodeWith cfgProcessors compileProcessor p
-      return $ w {wPaths=paths, wProcessor=processor}
+  -> CompilerMonad (StaticResolver m) (Either ConfigCompilerError RunnableConfig)
+compileWith processors preprocessors = compileConfig cc
+  where cc = StaticResolverConfig processors preprocessors
 
-    compilePath wp = do
-      pp' <- case wpPreprocessor wp of
-        Just pp ->
-          fmap Just $
-            compileSymOrCodeWith cfgPreProcessors (compileCode preprocessors) pp
-        Nothing -> return Nothing
-      return $ wp {wpPreprocessor=pp'}
-
-    compileProcessor (ProcessorCode code)  = compileCode processors code
-    compileProcessor (ProcessorShell cmds) = return $ shellProcessor cmds
-
-    compileCode (SymbolTable syms) spec =
-      case spec of
-        EvalCode{}          -> throwE ["Cannot evaluate code"]
-        InterpretedPlugin{} -> throwE ["Cannot interpret plugins"]
-        LoadedPlugin{..} ->
-          case HM.lookup codeSymbol syms of
-            Just obj -> case obj codeParams of
-                          Right v -> return v
-                          Left e  -> throwE $ [concat [
-                                        "Could not parse config for "
-                                      , show codeSymbol
-                                      , ": ", show e]]
-            Nothing  -> throwE $ [concat [ "Plugin ", show codeSymbol
-                                         , " is not defined"]]
-
-    compileSymOrCodeWith _ func (SymCode code)         = func code
-    compileSymOrCodeWith (SymbolTable syms) func (SymName name) = do
-      case HM.lookup name syms of
-          Nothing   -> throwE [concat ["Unresolved symbol: ", show name]]
-          Just code -> func code
