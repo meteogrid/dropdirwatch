@@ -4,7 +4,7 @@ import Test.Hspec
 import Control.Monad (forM_)
 import Data.Yaml (decodeFileEither)
 import System.DirWatch.Config (Config(..))
-import System.DirWatch.Interpreter (compileConfig)
+import System.DirWatch.Interpreter (interpretConfig)
 import System.DirWatch.ShellEnv (envSet, envAppend)
 import System.FilePath.Glob (namesMatching)
 import Data.Monoid (mempty)
@@ -19,7 +19,7 @@ spec = do
       eConfig <- runIO $ decodeFileEither "test/config.yaml"
 
       it "can load config" $ withValidConfig eConfig $ \config -> do
-        rConfig <- compileConfig config
+        rConfig <- interpretConfig config
         case rConfig of
           Right _ -> return ()
           Left e  -> expectationFailure $ show e
@@ -38,7 +38,7 @@ spec = do
           eConfig <- decodeFileEither file
           case eConfig of
             Right cConfig -> do
-              rConfig <- compileConfig cConfig
+              rConfig <- interpretConfig cConfig
               case rConfig of
                 Right _ -> expectationFailure "Should have failed"
                 Left  _ -> return ()

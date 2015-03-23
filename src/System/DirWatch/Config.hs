@@ -2,8 +2,12 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleContexts #-}
 module System.DirWatch.Config (
     Config (..)
+  , ConfigCompiler (..)
+  , CompilerEnv (..)
   , Watcher (..)
   , WatchedPath (..)
   , Code (..)
@@ -16,10 +20,12 @@ module System.DirWatch.Config (
   , RunnableWatcher
   , RunnableConfig
   , symbolTable
+  , compileConfig
 ) where
 
 import Control.Applicative ((<$>), (<*>), (<|>))
-import Control.Monad (foldM_)
+import Control.Monad (foldM_, liftM)
+import Control.Monad.Reader (MonadReader, asks)
 import Data.Aeson (
     FromJSON (..)
   , ToJSON (..)
@@ -32,6 +38,7 @@ import Data.Aeson (
   , (.!=)
   )
 import Data.Monoid (Monoid(..))
+import Data.Typeable (Typeable)
 import Data.Function (on)
 import Data.Default (Default(def))
 import Data.Maybe (fromMaybe)
@@ -41,7 +48,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(hashWithSalt))
 import Data.Time (NominalDiffTime)
 import System.DirWatch.ShellEnv (ShellEnv)
-import System.DirWatch.Processor (Processor, ProcessorM)
+import System.DirWatch.Processor (Processor, ProcessorM, shellProcessor)
 import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Util (AbsPath)
 import System.FilePath.GlobPattern (GlobPattern)
@@ -292,3 +299,72 @@ instance FromJSON ProcessorCode where
   parseJSON o@(Object v)
     = (ProcessorShell <$> v .: "shell") <|> (ProcessorCode <$> parseJSON o)
   parseJSON _ = fail "Expected an object for \"eval\", \"shell\" or \"plugin\""
+
+
+
+data CompilerEnv m
+  = CompilerEnv {
+      cePreProcessors :: SymbolTable Code
+    , ceProcessors    :: SymbolTable ProcessorCode
+    , ceConfig        :: CompilerConfig m
+  }
+
+
+class (Monad (CompilerMonad m), MonadReader (CompilerEnv m) m)
+  => ConfigCompiler m where
+  data CompilerConfig m  :: *
+  type CompilerMonad m   :: * -> *
+
+  compileCode :: Typeable a => Code -> m a
+  runCompiler :: CompilerEnv m -> m a -> CompilerMonad m (Either [String] a)
+
+
+compileConfig
+  :: ConfigCompiler m
+  => CompilerEnv m
+  -> SerializableConfig
+  -> CompilerMonad m (Either [String] RunnableConfig)
+compileConfig env c = runCompiler env $ do
+  watchers <- mapM compileWatcher (cfgWatchers c)
+  return $ c {cfgWatchers = watchers}
+
+
+compileWatcher
+  :: ConfigCompiler m
+  => SerializableWatcher
+  -> m RunnableWatcher
+compileWatcher w = do
+  paths <- mapM compilePath (wPaths w)
+  mP <- case wProcessor w of
+          Nothing -> return Nothing
+          Just p  -> liftM Just $ do
+            syms <- asks ceProcessors
+            compileSymOrCodeWith syms compileProcessor p
+  return $ w {wPaths=paths, wProcessor=mP}
+
+compilePath
+  :: (ConfigCompiler m, Typeable pp)
+  => WatchedPath (SymOrCode Code)
+  -> m (WatchedPath pp)
+compilePath wp = do
+  pp' <- case wpPreprocessor wp of
+    Just pp ->
+      liftM Just $ do
+        syms <- asks cePreProcessors
+        compileSymOrCodeWith syms compileCode pp
+    Nothing -> return Nothing
+  return $ wp {wpPreprocessor=pp'}
+
+compileSymOrCodeWith
+  :: Monad m => SymbolTable t -> (t -> m a) -> SymOrCode t -> m a
+compileSymOrCodeWith _ func (SymCode code) = func code
+compileSymOrCodeWith (SymbolTable syms) func (SymName name) = do
+  case HM.lookup name syms of
+      Nothing   -> fail ("Unresolved symbol: " ++ name)
+      Just code -> func code
+
+
+compileProcessor
+  :: ConfigCompiler m => ProcessorCode -> m Processor
+compileProcessor (ProcessorCode code)  = compileCode code
+compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)
