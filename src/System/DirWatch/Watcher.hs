@@ -61,9 +61,7 @@ import System.DirWatch.Util (
 import System.DirWatch.Threading (
     SomeThreadHandle, toSomeThreadHandle, forkChild, waitChild
   , tryWaitSomeChild)
-import System.DirWatch.Logging (
-    LoggingT, MonadLogger, runStderrLoggingT, logDebug, logInfo, logError
-  , logWarn, fromStrings)
+import System.DirWatch.Logging (logDebug, logInfo, logError, logWarn)
 import System.DirWatch.Processor (
     ProcessorM, ProcessorConfig (..), ProcessorError, runProcessorM)
 import System.DirWatch.PreProcessor (runPreProcessor, yieldFilePath)
@@ -135,9 +133,9 @@ instance Monoid WatcherState where
 
 newtype WatcherM a
   = WatcherM {
-      unWatcherM :: LoggingT (ReaderT WatcherEnv (StateT WatcherState IO)) a
+      unWatcherM :: ReaderT WatcherEnv (StateT WatcherState IO) a
       }
-  deriving ( Functor, Applicative, Monad, MonadLogger, MonadReader WatcherEnv
+  deriving ( Functor, Applicative, Monad, MonadReader WatcherEnv
            , MonadState WatcherState, MonadIO, MonadBase IO)
 
 instance MonadBaseControl IO WatcherM where
@@ -153,7 +151,6 @@ runWatcherEnv
 runWatcherEnv env state
   = flip runStateT state
   . flip runReaderT env
-  . runStderrLoggingT
   . unWatcherM
 
 runWatchLoop
@@ -189,8 +186,7 @@ setupWatches = do
           let matched = HS.filter (any (p `globMatch`) . wGlobs) watchers
               p = joinAbsPath baseDir [filePath]
           when (not (HS.null matched)) $ do
-            runStderrLoggingT $ $(logInfo) $
-              fromStrings [show p," has arrived"]
+            $(logInfo) $ concat [show p," has arrived"]
             writeChan chan $ Work matched p
     mError <- addIWatch baseDir $ \case
                 MovedIn{isDirectory=False, ..}       -> handleFile filePath
@@ -199,10 +195,10 @@ setupWatches = do
                 _ -> return ()
     case mError of
       Just e ->
-        $(logWarn) $ fromStrings ["Could not watch ", show baseDir, " for "
+        $(logWarn) $ concat ["Could not watch ", show baseDir, " for "
                                  , names, ": ", show e]
       Nothing ->
-        $(logInfo) $ fromStrings ["Watching ", show baseDir, " for ", names]
+        $(logInfo) $ concat ["Watching ", show baseDir, " for ", names]
 
 loop :: WatcherM ()
 loop = do
@@ -239,8 +235,7 @@ checkExistingFiles = do
         -- file has not been modified, assume it is stable and work on it.
         -- If it has been modified we can ignore it assuming we'll be notified
         -- when it has been closed
-        runStderrLoggingT $ $(logInfo) $
-          fromStrings ["File ", show abspath, " has been stable"]
+        $(logInfo) $ concat ["File ", show abspath, " has been stable"]
         writeChan chan $ Work watchers abspath
       
 
@@ -277,17 +272,17 @@ handleFinishedFiles = do
         anyRunning   = not . HS.null . tRunning  $ tmap'
     case (hadFailures, someFinished, anyRunning) of
       (False, _, False) -> do
-        $(logInfo) $ fromStrings [ "Finished processing ", show fname
-                                 , " without errors"]
+        $(logInfo) $ concat [ "Finished processing ", show fname
+                            , " without errors"]
         archiveFile fname
         return Nothing
       (True, True, False) -> do
-        $(logWarn) $ fromStrings [ "Finished processing ", show fname
-                                  , " with some errors"]
+        $(logWarn) $ concat [ "Finished processing ", show fname
+                            , " with some errors"]
         archiveFile fname
         return Nothing
       (True,False,False) -> do
-        $(logError) $ fromStrings [ "All watchers failed on ", show fname]
+        $(logError) $ concat [ "All watchers failed on ", show fname]
         return Nothing
       (_,_,True) -> return $ Just (fname,tmap')
   modify $ \s -> s {wThreads=HM.fromList remaining}
@@ -328,10 +323,10 @@ archiveFile fname = do
         renameFile (toFilePath fname) finalDest
       case result of
         Left e -> do
-          $(logWarn) $ fromStrings [ "Could not archive ", show fname, ": "
-                                   , show e]
+          $(logWarn) $ concat [ "Could not archive ", show fname, ": "
+                              , show e]
         Right () ->
-          $(logInfo) $ fromStrings ["Archived ", show fname, " -> ", finalDest]
+          $(logInfo) $ concat ["Archived ", show fname, " -> ", finalDest]
     Nothing -> return ()
 
 
@@ -350,12 +345,12 @@ runWatchersOnFile watchers filename = do
           result <- runProcessorM cfg time $ processWatcher startUTC filename w
           case (result, n<=numRetries) of
             (Left e, True) -> do
-              runStderrLoggingT $ $(logWarn) $ fromStrings $
+              $(logWarn) $ concat $
                 errMsg e n ++ [" Will retry in ", show retryInterval]
               sleep retryInterval
               process (n+1)
             (Left e, False) -> do
-              runStderrLoggingT $ $(logError) $ fromStrings $ errMsg e n
+              $(logError) $ concat $ errMsg e n
               return result
             (Right _, _) -> return result
         startUTC = posixSecondsToUTCTime start
@@ -372,7 +367,7 @@ runWatchersOnFile watchers filename = do
 
 processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
 processWatcher now abspath Watcher{..} = do
-  $(logDebug) $ fromStrings ["Running \"", wName, "\" on ", show abspath]
+  $(logDebug) $ concat ["Running \"", wName, "\" on ", show abspath]
   case wProcessor of
     Just processor  -> do
       let pathPreproc  = join $ fmap wpPreprocessor $
@@ -383,8 +378,8 @@ processWatcher now abspath Watcher{..} = do
           source       = sourceFile filepath
           filepath     = toFilePath abspath
       preprocess >>= mapM_ process
-      $(logDebug) $ fromStrings ["Finished \"", wName, "\" on ", show abspath]
-    Nothing -> $(logInfo) $ fromStrings [wName, " has no processor"]
+      $(logDebug) $ concat ["Finished \"", wName, "\" on ", show abspath]
+    Nothing -> $(logInfo) $ concat [wName, " has no processor"]
 
 
 wGlobs :: Watcher a b -> [AbsPath]

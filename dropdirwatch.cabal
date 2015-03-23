@@ -66,7 +66,7 @@ library
                      , transformers-compat
                      , transformers-base
                      , mtl
-                     , monad-logger
+                     , hslogger
                      , monad-control
                      , data-default
                      , directory
@@ -78,6 +78,7 @@ library
                      , temporary
                      , hashable
                      , unix
+                     , optparse-applicative
   if flag(old-locale)
     build-depends: time < 1.5, old-locale
   else
@@ -121,7 +122,7 @@ test-suite spec
     , transformers-compat
     , transformers-base
     , mtl
-    , monad-logger
+    , hslogger
     , monad-control
     , data-default
     , directory
@@ -133,6 +134,7 @@ test-suite spec
     , temporary
     , hashable
     , unix
+    , optparse-applicative
   default-language:    Haskell2010
   if flag(old-locale)
     build-depends: time < 1.5, old-locale

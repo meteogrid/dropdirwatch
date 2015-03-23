@@ -45,7 +45,7 @@ import System.DirWatch.PreProcessor hiding (runPreProcessor)
 import System.DirWatch.Types (HasCurrentTime(..))
 import System.DirWatch.ShellEnv (envSet, envAppend)
 import System.DirWatch.Logging (
-  fromStrings, logDebug, logInfo, logWarn, logError)
+  logDebug, logInfo, logWarn, logError, logCritical)
 import Data.Aeson.Types (parseEither)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS

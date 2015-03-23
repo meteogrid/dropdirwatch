@@ -3,13 +3,15 @@
 {-# LANGUAGE RecordWildCards #-}
 module System.DirWatch (
     Config (..)
+  , Options (..)
   , Watcher (..)
   , RunnableWatcher
   , RunnableConfig
-  , runWithConfigFile
+  , runWithOptions
   , compileWith
   , mainWithCompiler
   , symbolTable
+  , setupLogging
   , def
 ) where
 
@@ -22,47 +24,71 @@ import Control.Concurrent.MVar (newMVar, readMVar, modifyMVar_, tryPutMVar)
 import Control.Exception (finally)
 import Data.Aeson (FromJSON, Object)
 import Data.Default (def)
-import Data.Monoid ((<>))
+import Data.Monoid (mconcat)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T (Text, unlines)
 import Data.Yaml (decodeFileEither)
 import System.INotify
-import System.Environment (getArgs)
 import System.Posix.Signals (installHandler, Handler(Catch), sigINT, sigTERM)
-import System.DirWatch.Logging
+import System.DirWatch.Logging (Priority(..), setupLogging, logInfo, logError)
 import System.DirWatch.Config
 import System.DirWatch.Watcher
 import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Processor (Processor, ProcessorM, shellProcessor)
+import Options.Applicative
+
+data Options
+   = Options {
+       optConfigFile     :: FilePath
+     , optReload         :: Bool
+     , optPriority       :: Priority
+     , optSyslogPriority :: Priority
+   }
+
+options :: Parser Options
+options = Options
+      <$> strOption
+          ( long "config"
+         <> short 'c'
+         <> metavar "CONFIG"
+         <> help "Path to the configuration YAML file")
+      <*> switch
+          ( long "reload"
+         <> short 'r'
+         <> help "Wheter to reload the configuration/plugins when modified")
+      <*> option auto
+          ( long "--log-level"
+         <> short 'l'
+         <> help "Priority for the log messages that go to stderr"
+         <> value INFO)
+      <*> option auto
+          ( long "--syslog-level"
+         <> help "Priority for the log messages that go to syslog"
+         <> value ERROR)
+
 
 mainWithCompiler
   :: FromJSON a
-  => (a -> IO (Either [T.Text] (RunnableConfig ppc pc)))
-  -> FilePath
+  => (a -> IO (Either [String] (RunnableConfig ppc pc)))
+  -> [InfoMod Options]
   -> IO ()
-mainWithCompiler compiler defaultConfigFile = do
-  args <- getArgs
-  let (configFile, reload) =
-        case args of
-          ["--reload"]        -> (defaultConfigFile, True)
-          [fname]             -> (fname, False)
-          [fname, "--reload"] -> (fname, True)
-          []                  -> (defaultConfigFile, False)
-          _                   -> error $ "Invalid args: " ++ show args
-  runWithConfigFile compiler configFile reload
+mainWithCompiler compiler infoOpts = do
+  progOpts@Options{..} <- execParser opts
+  setupLogging optSyslogPriority optPriority
+  runWithOptions compiler progOpts
+  where opts = info (helper <*> options) (mconcat (fullDesc:infoOpts))
 
-runWithConfigFile
+
+runWithOptions
   :: FromJSON a
-  => (a -> IO (Either [T.Text] (RunnableConfig ppc pc)))
-  -> FilePath -> Bool -> IO ()
-runWithConfigFile compiler configFile reloadConfig = do
+  => (a -> IO (Either [String] (RunnableConfig ppc pc))) -> Options -> IO ()
+runWithOptions compiler Options{..} = do
   stopCond <- mkStopCond
   pluginDirs <- newEmptyMVar
   interrupted <- newMVar 0
   let mainLoop initialConfig initialState = do
         newState <- liftIO $ runWatchLoop initialConfig initialState stopCond
         shouldStop <- liftIO $ wasInterrupted interrupted
-        if reloadConfig && not shouldStop then do
+        if optReload && not shouldStop then do
           eNewConfig <- liftIO $
             finally decodeAndCompile
                     (installSignalHandlers stopCond interrupted)
@@ -81,22 +107,19 @@ runWithConfigFile compiler configFile reloadConfig = do
                      (installSignalHandlers stopCond interrupted)
   _ <- case eConfig of
     Right initialConfig -> withINotify $ \ino -> do
-      when (reloadConfig) $ do
+      when optReload $ do
         watchNewPluginDirs pluginDirs initialConfig
-        watchConfig configFile stopCond pluginDirs ino
-      runStderrLoggingT $ mainLoop initialConfig Nothing
-    Left err -> do
-      runStderrLoggingT (logCompileError err)
-      error "Unable to load config"
+        watchConfig optConfigFile stopCond pluginDirs ino
+      mainLoop initialConfig Nothing
+    Left err -> logCompileError err >> error "Unable to load config"
   -- TODO: Cleanup state
   return ()
   where
     decodeAndCompile = do
-      ePConfig <- decodeFileEither configFile
+      ePConfig <- decodeFileEither optConfigFile
       case ePConfig of
         Right pConfig -> compiler pConfig
-        Left e -> return . Left $
-          [fromStrings ["Could not parse YAML: ", show e]]
+        Left e -> return . Left $ [concat ["Could not parse YAML: ", show e]]
 
 watchNewPluginDirs
   :: MonadIO m => MVar [FilePath] -> Config pp p ppc pc -> m ()
@@ -127,15 +150,14 @@ watchConfig configFile stopCond pluginDirs ino = do
 whenM :: Monad m => m Bool -> m () -> m ()
 whenM cond act = cond >>= flip when act
 
-logCompileError :: MonadLogger m => [T.Text] -> m ()
-logCompileError = $(logError) . ("\n"<>) . T.unlines
+logCompileError :: MonadIO m => [String] -> m ()
+logCompileError = $(logError) . ("\n"<>) . unlines
 
 
 installSignalHandlers :: StopCond -> MVar Int -> IO ()
 installSignalHandlers stopCond interrupted = do
   let handler signal =  do
-        runStderrLoggingT $
-            $(logInfo) $ fromStrings ["Caught signal: ", signal]
+        $(logInfo) $ concat ["Caught signal: ", signal]
         modifyMVar_ interrupted (return . (+1))
         void $ tryPutMVar stopCond ()
   void $ installHandler sigINT (Catch $ handler "INT") Nothing
@@ -149,7 +171,7 @@ compileWith
   => SymbolTable (Object -> Either String Processor)
   -> SymbolTable (Object -> Either String (PreProcessor ProcessorM))
   -> SerializableConfig
-  -> (m (Either [T.Text] (RunnableConfig Code ProcessorCode)))
+  -> (m (Either [String] (RunnableConfig Code ProcessorCode)))
 compileWith processors preprocessors c@Config{..}
   = return . runExcept $ do
       watchers' <- mapM compileWatcher cfgWatchers
@@ -182,15 +204,15 @@ compileWith processors preprocessors c@Config{..}
           case HM.lookup codeSymbol syms of
             Just obj -> case obj codeParams of
                           Right v -> return v
-                          Left e  -> throwE $ [fromStrings [
+                          Left e  -> throwE $ [concat [
                                         "Could not parse config for "
                                       , show codeSymbol
                                       , ": ", show e]]
-            Nothing  -> throwE $ [fromStrings [ "Plugin ", show codeSymbol
-                                              , " is not defined"]]
+            Nothing  -> throwE $ [concat [ "Plugin ", show codeSymbol
+                                         , " is not defined"]]
 
     compileSymOrCodeWith _ func (SymCode code)         = func code
     compileSymOrCodeWith (SymbolTable syms) func (SymName name) = do
       case HM.lookup name syms of
-          Nothing   -> throwE [fromStrings ["Unresolved symbol: ", show name]]
+          Nothing   -> throwE [concat ["Unresolved symbol: ", show name]]
           Just code -> func code

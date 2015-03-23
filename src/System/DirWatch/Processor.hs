@@ -67,13 +67,7 @@ import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Monoid (mempty, mappend)
 import Data.Typeable (Typeable)
 import GHC.IO.Exception (IOErrorType (ResourceVanished))
-import System.DirWatch.Logging (
-    MonadLogger
-  , LoggingT
-  , runStderrLoggingT
-  , logError
-  , fromStrings
-  )
+import System.DirWatch.Logging (logError)
 import System.DirWatch.Types (HasCurrentTime(..))
 import System.DirWatch.ShellEnv
 import System.DirWatch.Threading (ThreadHandle, SomeThreadHandle)
@@ -120,17 +114,16 @@ instance Default ProcessorConfig where
 newtype ProcessorM a
   = ProcessorM {
       unProcessorM :: ExceptT ProcessorError (
-        LoggingT (ResourceT (ReaderT ProcessorEnv IO))
+        ResourceT (ReaderT ProcessorEnv IO)
         ) a
       }
-  deriving ( Functor, Applicative, Monad, MonadLogger
-           , MonadIO, MonadBase IO, Typeable, MonadThrow, MonadResource)
+  deriving ( Functor, Applicative, Monad, MonadIO, MonadBase IO, Typeable
+           , MonadThrow, MonadResource)
 
 runProcessorEnv :: ProcessorEnv -> ProcessorM a -> IO (Either ProcessorError a)
 runProcessorEnv env
   = flip runReaderT env
   . runResourceT
-  . runStderrLoggingT
   . runExceptT
   . E.handle (E.throwE . ProcessorException)
   . unProcessorM
@@ -175,7 +168,7 @@ runProcessorM cfg time act
                       ) `catch` handleProcKillErr
         _       -> return ()
     killThread th = flip catch (handleThreadKillErr th) . Th.killSomeChild $ th
-    logIt = runStderrLoggingT . $(logError) . fromStrings
+    logIt = $(logError) . concat
     handleThreadKillErr th (e :: IOException)
       = logIt ["Error when killing unfinished thread ", show th, ": ", show e]
     handleProcKillErr (e :: IOException)
