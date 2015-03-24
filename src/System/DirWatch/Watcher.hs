@@ -36,10 +36,10 @@ import Data.Fixed (Fixed, E2)
 import Data.HashSet (HashSet)
 import Data.Hashable (Hashable(hashWithSalt))
 import qualified Data.HashSet as HS (
-  union, empty, singleton, toList, fromList, filter, null)
+  union, empty, singleton, toList, fromList, filter, null, member, map)
 import Data.HashMap.Strict as HM (
     HashMap, insertWith, unionWith, empty, elems, toList, fromList
-  , fromListWith, lookup, member)
+  , fromListWith, lookup)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
 import Data.Time.Clock (
@@ -203,13 +203,7 @@ loop = do
   handleFinishedFiles
   msg <- getMessage
   case msg of
-    Work ws file -> do
-      ts <- gets wThreads
-      if file `HM.member` ts
-        then $(logWarn) $ concat [ "File ", show file
-                                 , " is already being processed"]
-        else runWatchersOnFile (HS.toList ws) file
-      loop
+    Work ws file -> runWatchersOnFile (HS.toList ws) file >> loop
     WakeUp       -> loop
     Finish       -> return ()
 
@@ -341,37 +335,46 @@ archiveFile fname = do
 
               
 runWatchersOnFile :: [RunnableWatcher] -> AbsPath -> WatcherM ()
-runWatchersOnFile watchers filename = do
-  cfg <- processorConfig
-  chan <- asks wChan
-  start <- liftIO getPOSIXTime
-  let time = posixSecondsToUTCTime start
-  numRetries <- askConfig cfgNumRetries
-  retryInterval <- askConfig cfgRetryInterval
-  fps <- forM watchers $ \w -> do
-    let process n = do
-          result <- runProcessorM cfg time $ processWatcher startUTC filename w
-          case (result, n<=numRetries) of
-            (Left e, True) -> do
-              $(logWarn) $ concat $
-                errMsg e n ++ [" Will retry in ", show retryInterval]
-              sleep retryInterval
-              process (n+1)
-            (Left e, False) -> do
-              $(logError) $ concat $ errMsg e n
-              return result
-            (Right _, _) -> return result
-        startUTC = posixSecondsToUTCTime start
-        errMsg e n = ["Watcher ", show (wName w), " failed"] ++
-                     (if numRetries>0 then [" ",retryText n, ": ", show e]
-                                      else [])
-    liftIO $ do
-      th <- forkChild $ finally (process 1) (writeChan chan WakeUp)
-      return RunningWatcher { rwHandle   = toSomeThreadHandle th
-                            , rwStart    = start
-                            , rwWatcher  = w}
-  addToRunning filename fps
-  where
+runWatchersOnFile toAdd filename = do
+  ts <- gets wThreads
+  let mRunning = fmap (HS.map rwWatcher . tRunning) (HM.lookup filename ts)  
+      watchers = case mRunning of
+        Just runSet -> filter (not . (`HS.member` runSet)) toAdd
+        Nothing     -> toAdd
+  if null watchers
+    then $(logWarn) $
+            concat ["File ", show filename, " is already being processed"]
+    else do
+      cfg <- processorConfig
+      chan <- asks wChan
+      start <- liftIO getPOSIXTime
+      let time = posixSecondsToUTCTime start
+      numRetries <- askConfig cfgNumRetries
+      retryInterval <- askConfig cfgRetryInterval
+      fps <- forM watchers $ \w -> do
+        let process n = do
+              result <- runProcessorM cfg time $
+                processWatcher startUTC filename w
+              case (result, n<=numRetries) of
+                (Left e, True) -> do
+                  $(logWarn) $ concat $
+                    errMsg e n ++ [" Will retry in ", show retryInterval]
+                  sleep retryInterval
+                  process (n+1)
+                (Left e, False) -> do
+                  $(logError) $ concat $ errMsg e n
+                  return result
+                (Right _, _) -> return result
+            startUTC = posixSecondsToUTCTime start
+            errMsg e n = ["Watcher ", show (wName w), " failed"] ++
+                         (if numRetries>0 then [" ",retryText n, ": ", show e]
+                                          else [])
+        liftIO $ do
+          th <- forkChild $ finally (process 1) (writeChan chan WakeUp)
+          return RunningWatcher { rwHandle   = toSomeThreadHandle th
+                                , rwStart    = start
+                                , rwWatcher  = w}
+      addToRunning filename fps
 
 processWatcher :: UTCTime -> AbsPath -> RunnableWatcher -> ProcessorM ()
 processWatcher now abspath Watcher{..} = do
@@ -409,10 +412,10 @@ addToRunning path fps = do
 
 waitForJobsToComplete :: WatcherState -> IO ()
 waitForJobsToComplete state = do
-  when (length initialThreads > 0) $ do
+  when (length runningThreads > 0) $ do
     $(logInfo) $ concat [ "Waiting at most ", show maxWait, "s for "
-                        , show (length initialThreads), " threads to complete"]
-    go initialThreads 0
+                        , show (length runningThreads), " threads to complete"]
+    go runningThreads 0
   where
     maxWait = 30
     go :: [SomeThreadHandle a] -> Int -> IO ()
@@ -426,5 +429,5 @@ waitForJobsToComplete state = do
           tryWaitSomeChild t >>= return . maybe (Just t) (const Nothing)
         sleep 1
         go stillRunning (n+1)
-    initialThreads = map rwHandle . concat . map (HS.toList . tRunning) 
+    runningThreads = map rwHandle . concat . map (HS.toList . tRunning) 
                    . HM.elems . wThreads $ state
