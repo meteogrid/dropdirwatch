@@ -39,7 +39,7 @@ import qualified Data.HashSet as HS (
   union, empty, singleton, toList, fromList, filter, null)
 import Data.HashMap.Strict as HM (
     HashMap, insertWith, unionWith, empty, elems, toList, fromList
-  , fromListWith, lookup)
+  , fromListWith, lookup, member)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
 import Data.Time.Clock (
@@ -203,7 +203,13 @@ loop = do
   handleFinishedFiles
   msg <- getMessage
   case msg of
-    Work ws file -> runWatchersOnFile (HS.toList ws) file >> loop
+    Work ws file -> do
+      ts <- gets wThreads
+      if file `HM.member` ts
+        then $(logWarn) $ concat [ "File ", show file
+                                 , " is already being processed"]
+        else runWatchersOnFile (HS.toList ws) file
+      loop
     WakeUp       -> loop
     Finish       -> return ()
 
