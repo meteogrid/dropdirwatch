@@ -164,6 +164,7 @@ runProcessorM cfg time act
                       terminateProcess p
                       threadDelay $ 10*1000000 -- give it 10 seconds to TERM...
                       interruptProcessGroupOf p -- ... or kill it
+                      void $ P.waitForProcess p
                       ) `catch` handleProcKillErr
         _       -> return ()
     killThread th = flip catch (handleThreadKillErr th) . Th.killSomeChild $ th
