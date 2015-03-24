@@ -61,7 +61,6 @@ interpretConfig cfg@Config{..} = compileConfig cc cfg
 
 
 instance Compiler HintCompiler where
-  type CompilerBase HintCompiler = IO
   data CompilerConfig HintCompiler
          = HintCompilerConfig {
              ccGlobalImports :: [ModuleImport]

@@ -192,21 +192,19 @@ installSignalHandlers stopCond interrupted = do
 wasInterrupted :: MVar Int -> IO Bool
 wasInterrupted = fmap (>0) . readMVar
 
-newtype StaticResolver m a
+newtype StaticResolver a
   = StaticResolver {
-      unStaticResolver :: ReaderT (CompilerEnv (StaticResolver m)) m a
+      unStaticResolver :: ReaderT (CompilerEnv StaticResolver) IO a
       }
   deriving ( Functor, Applicative, Monad, MonadThrow, MonadCatch
-           , MonadReader (CompilerEnv (StaticResolver m)))
+           , MonadReader (CompilerEnv StaticResolver))
 
-instance (Functor m, Applicative m, Monad m, MonadThrow m, MonadCatch m)
-  => Compiler (StaticResolver m) where
-  type CompilerBase (StaticResolver m) = m
-  data CompilerConfig (StaticResolver m) = SymbolTables
+instance Compiler StaticResolver where
+  data CompilerConfig StaticResolver = SymbolTables
          (SymbolTable (Object -> Either String Processor))
          (SymbolTable (Object -> Either String (PreProcessor ProcessorM)))
   runCompiler env = flip runReaderT env . unStaticResolver
-  compileCode :: forall a. Typeable a => Code -> StaticResolver m a
+  compileCode :: forall a. Typeable a => Code -> StaticResolver a
   compileCode spec =
     case spec of
       EvalCode{}          -> throwCompilerError "Cannot evaluate code"
@@ -221,7 +219,7 @@ instance (Functor m, Applicative m, Monad m, MonadThrow m, MonadCatch m)
     where 
       applyParams
         :: Maybe (Object -> Either String a) -> String -> Object
-        -> StaticResolver m a
+        -> StaticResolver a
       applyParams (Just obj) sym params =
         case obj params of
           Right v -> return v
@@ -233,11 +231,11 @@ instance (Functor m, Applicative m, Monad m, MonadThrow m, MonadCatch m)
 
 
 compileWithSymTables
-  :: Compiler (StaticResolver m)
+  :: Compiler StaticResolver
   => SymbolTable (Object -> Either String Processor)
   -> SymbolTable (Object -> Either String (PreProcessor ProcessorM))
   -> SerializableConfig
-  -> m (Either CompilerError RunnableConfig)
+  -> IO (Either CompilerError RunnableConfig)
 compileWithSymTables processors preprocessors = compileConfig cc
   where cc = SymbolTables processors preprocessors
 

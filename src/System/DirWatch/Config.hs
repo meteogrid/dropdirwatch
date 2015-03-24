@@ -306,15 +306,11 @@ instance FromJSON ProcessorCode where
   parseJSON _ = fail "Expected an object for \"eval\", \"shell\" or \"plugin\""
 
 
-class ( Monad (CompilerBase m)
-      , MonadReader (CompilerEnv m) m
-      , MonadThrow m
-      , MonadCatch m)
+class (MonadReader (CompilerEnv m) m , MonadThrow m , MonadCatch m)
   => Compiler m where
   data CompilerConfig m  :: *
-  type CompilerBase m   :: * -> *
   compileCode :: Typeable a => Code -> m a
-  runCompiler :: CompilerEnv m -> m a -> CompilerBase m a
+  runCompiler :: CompilerEnv m -> m a -> IO a
 
 
 data CompilerEnv m
@@ -331,7 +327,7 @@ compileConfig
   :: Compiler m
   => CompilerConfig m
   -> SerializableConfig
-  -> CompilerBase m (Either CompilerError RunnableConfig)
+  -> IO (Either CompilerError RunnableConfig)
 compileConfig cc c = runCompiler env $ try $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}
