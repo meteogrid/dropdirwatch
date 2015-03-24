@@ -60,18 +60,18 @@ import System.FilePath.GlobPattern (GlobPattern)
 
 data Config pp p ppc pc
   = Config {
-      cfgPluginDirs    :: [FilePath]
-    , cfgArchiveDir    :: Maybe AbsPath
-    , cfgShellEnv      :: ShellEnv
-    , cfgWatchers      :: [Watcher pp p]
-    , cfgStableTime    :: NominalDiffTime
-    , cfgPackageDbs    :: [GlobPattern]
-    , cfgNoArchives    :: [AbsPath]
-    , cfgImports       :: [ModuleImport]
-    , cfgProcessors    :: SymbolTable pc
-    , cfgPreProcessors :: SymbolTable ppc
-    , cfgNumRetries    :: Int
-    , cfgRetryInterval :: NominalDiffTime
+      cfgPluginDirs    :: ![FilePath]
+    , cfgArchiveDir    :: !(Maybe AbsPath)
+    , cfgShellEnv      :: !ShellEnv
+    , cfgWatchers      :: ![Watcher pp p]
+    , cfgStableTime    :: !NominalDiffTime
+    , cfgPackageDbs    :: ![GlobPattern]
+    , cfgNoArchives    :: ![AbsPath]
+    , cfgImports       :: ![ModuleImport]
+    , cfgProcessors    :: !(SymbolTable pc)
+    , cfgPreProcessors :: !(SymbolTable ppc)
+    , cfgNumRetries    :: !Int
+    , cfgRetryInterval :: !NominalDiffTime
   } deriving Show
 
 instance Default (Config a b c d) where
@@ -153,9 +153,9 @@ failIfDuplicate msg func objs =  foldM_ check [] (map func objs) >> return objs
 
 data Watcher pp p
   = Watcher {
-      wName         :: String
-    , wPaths        :: [WatchedPath pp]
-    , wProcessor    :: Maybe p
+      wName         :: !String
+    , wPaths        :: ![WatchedPath pp]
+    , wProcessor    :: !(Maybe p)
   } deriving Show
 
 instance Eq (Watcher a b) where
@@ -196,8 +196,8 @@ instance FromJSON SerializableWatcher where
 
 data WatchedPath pp
   = WatchedPath {
-      wpGlob         :: AbsPath
-    , wpPreprocessor :: Maybe pp
+      wpGlob         :: !AbsPath
+    , wpPreprocessor :: !(Maybe pp)
     }
   deriving (Show, Eq)
 
@@ -217,8 +217,8 @@ instance FromJSON pp => FromJSON (WatchedPath pp) where
   parseJSON _ = fail "\"paths\" item must be either an object or string"
 
 data SymOrCode code
-  = SymName  String
-  | SymCode  code
+  = SymName  !String
+  | SymCode  !code
   deriving (Eq, Show)
 
 instance ToJSON code => ToJSON (SymOrCode code) where
@@ -247,13 +247,13 @@ instance FromJSON ModuleImport where
   parseJSON _ = fail "Expected a string for \"imports\""
 
 data Code
-  = EvalCode          { codeEval    :: String
-                      , codeImports :: [ModuleImport]}
-  | InterpretedPlugin { codeModule :: String
-                      , codeSymbol :: String
-                      , codeParams :: Object}
-  | LoadedPlugin      { codeSymbol :: String
-                      , codeParams :: Object}
+  = EvalCode          { codeEval    :: !String
+                      , codeImports :: ![ModuleImport]}
+  | InterpretedPlugin { codeModule :: !String
+                      , codeSymbol :: !String
+                      , codeParams :: !Object}
+  | LoadedPlugin      { codeSymbol :: !String
+                      , codeParams :: !Object}
   deriving (Show, Eq)
 
 instance ToJSON Code where
@@ -292,8 +292,8 @@ instance FromJSON Code where
   parseJSON _ = fail "Expected an object for \"eval\" or \"plugin\""
 
 data ProcessorCode
-  = ProcessorCode  Code
-  | ProcessorShell [String]
+  = ProcessorCode  !Code
+  | ProcessorShell ![String]
   deriving Show
 
 instance ToJSON ProcessorCode where
@@ -371,10 +371,10 @@ compileSymOrCodeWith symGetter func (SymName name) = do
       Just code -> func code
 
 data CompilerError
-  = UnresolvedSymbol      String
-  | CompilerError         [String]
-  | ParseError            ParseException
-  | InternalCompilerError String
+  = UnresolvedSymbol      !String
+  | CompilerError         ![String]
+  | ParseError            !ParseException
+  | InternalCompilerError !String
   deriving (Typeable, Show)
 
 instance Exception CompilerError

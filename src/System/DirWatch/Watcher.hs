@@ -70,9 +70,9 @@ type DirMap = HashMap AbsPath (HashSet RunnableWatcher)
 
 data RunningWatcher
   = RunningWatcher {
-      rwHandle   :: SomeThreadHandle ProcessorError
-    , rwWatcher  :: RunnableWatcher
-    , rwStart    :: POSIXTime
+      rwHandle   :: !(SomeThreadHandle ProcessorError)
+    , rwWatcher  :: !RunnableWatcher
+    , rwStart    :: !POSIXTime
     }
 
 isHandling :: ThreadMap -> RunnableWatcher -> AbsPath -> Bool
@@ -105,16 +105,16 @@ watchedEvents :: [EventVariety]
 watchedEvents = [MoveIn, CloseWrite]
 
 data ChanMessage
-  = Work (HashSet RunnableWatcher) AbsPath
+  = Work !(HashSet RunnableWatcher) !AbsPath
   | WakeUp
   | Finish
 
 data WatcherEnv
   = WatcherEnv {
-      wConfig   :: RunnableConfig
-    , wChan     :: Chan ChanMessage
-    , wInotify  :: INotify
-    , wDirMap   :: DirMap
+      wConfig   :: !RunnableConfig
+    , wChan     :: !(Chan ChanMessage)
+    , wInotify  :: !INotify
+    , wDirMap   :: !DirMap
   }
 
 askConfig :: (RunnableConfig -> a) -> WatcherM a
@@ -123,7 +123,7 @@ askConfig f = asks (f . wConfig)
 
 data WatcherState
   = WatcherState {
-      wThreads :: ThreadMap
+      wThreads :: !ThreadMap
   }
 instance Monoid WatcherState where
   mempty  = WatcherState mempty
