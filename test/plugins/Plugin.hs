@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Plugin where
+import Control.Applicative ((<$>))
 import System.DirWatch.PluginAPI
 
 newtype Prefix = Prefix String
