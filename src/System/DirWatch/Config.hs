@@ -7,8 +7,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module System.DirWatch.Config (
     Config (..)
-  , ConfigCompiler (..)
-  , ConfigCompilerError (..)
+  , Compiler (..)
+  , CompilerError (..)
   , CompilerEnv (..)
   , Watcher (..)
   , WatchedPath (..)
@@ -306,6 +306,16 @@ instance FromJSON ProcessorCode where
   parseJSON _ = fail "Expected an object for \"eval\", \"shell\" or \"plugin\""
 
 
+class ( Monad (CompilerBase m)
+      , MonadReader (CompilerEnv m) m
+      , MonadThrow m
+      , MonadCatch m)
+  => Compiler m where
+  data CompilerConfig m  :: *
+  type CompilerBase m   :: * -> *
+  compileCode :: Typeable a => Code -> m a
+  runCompiler :: CompilerEnv m -> m a -> CompilerBase m a
+
 
 data CompilerEnv m
   = CompilerEnv {
@@ -315,23 +325,13 @@ data CompilerEnv m
   }
 
 
-class ( Monad (CompilerMonad m)
-      , MonadReader (CompilerEnv m) m
-      , MonadThrow m
-      , MonadCatch m)
-  => ConfigCompiler m where
-  data CompilerConfig m  :: *
-  type CompilerMonad m   :: * -> *
-
-  compileCode :: Typeable a => Code -> m a
-  runCompiler :: CompilerEnv m -> m a -> CompilerMonad m a
 
 
 compileConfig
-  :: ConfigCompiler m
+  :: Compiler m
   => CompilerConfig m
   -> SerializableConfig
-  -> CompilerMonad m (Either ConfigCompilerError RunnableConfig)
+  -> CompilerBase m (Either CompilerError RunnableConfig)
 compileConfig cc c = runCompiler env $ try $ do
   watchers <- mapM compileWatcher (cfgWatchers c)
   return $ c {cfgWatchers = watchers}
@@ -340,7 +340,7 @@ compileConfig cc c = runCompiler env $ try $ do
 
 
 compileWatcher
-  :: ConfigCompiler m
+  :: Compiler m
   => SerializableWatcher
   -> m RunnableWatcher
 compileWatcher w = do
@@ -351,7 +351,7 @@ compileWatcher w = do
   return $ w {wPaths=paths, wProcessor=mP}
 
 compilePath
-  :: (ConfigCompiler m, Typeable pp)
+  :: (Compiler m, Typeable pp)
   => WatchedPath (SymOrCode Code)
   -> m (WatchedPath pp)
 compilePath wp = do
@@ -361,7 +361,7 @@ compilePath wp = do
   return $ wp {wpPreprocessor=pp'}
 
 compileSymOrCodeWith
-  :: ConfigCompiler m
+  :: Compiler m
   => (CompilerEnv m -> SymbolTable t) -> (t -> m b) -> SymOrCode t -> m b
 compileSymOrCodeWith _         func (SymCode code) = func code
 compileSymOrCodeWith symGetter func (SymName name) = do
@@ -370,15 +370,16 @@ compileSymOrCodeWith symGetter func (SymName name) = do
       Nothing   -> throwM $ UnresolvedSymbol name
       Just code -> func code
 
-data ConfigCompilerError
-  = UnresolvedSymbol    String
-  | ConfigCompilerError [String]
-  | ParseError          ParseException
+data CompilerError
+  = UnresolvedSymbol      String
+  | CompilerError         [String]
+  | ParseError            ParseException
+  | InternalCompilerError String
   deriving (Typeable, Show)
 
-instance Exception ConfigCompilerError
+instance Exception CompilerError
 
 compileProcessor
-  :: ConfigCompiler m => ProcessorCode -> m Processor
+  :: Compiler m => ProcessorCode -> m Processor
 compileProcessor (ProcessorCode code)  = compileCode code
 compileProcessor (ProcessorShell cmds) = return (shellProcessor cmds)

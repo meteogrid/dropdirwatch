@@ -28,8 +28,8 @@ import Language.Haskell.Interpreter (
 import Language.Haskell.Interpreter.Unsafe (unsafeRunInterpreterWithArgs)
 import System.DirWatch.Config (
     Config(..)
-  , ConfigCompiler (..)
-  , ConfigCompilerError (..)
+  , Compiler (..)
+  , CompilerError (..)
   , CompilerEnv (..)
   , ModuleImport (..)
   , RunnableConfig
@@ -50,7 +50,7 @@ instance (MonadReader (CompilerEnv HintCompiler)) HintCompiler where
   local f act = asks f >>= HintCompiler . liftIO . flip runCompiler act
 
 interpretConfig
-  :: SerializableConfig -> IO (Either ConfigCompilerError RunnableConfig)
+  :: SerializableConfig -> IO (Either CompilerError RunnableConfig)
 interpretConfig cfg@Config{..} = compileConfig cc cfg
   where
     cc = HintCompilerConfig {
@@ -60,8 +60,8 @@ interpretConfig cfg@Config{..} = compileConfig cc cfg
          }
 
 
-instance ConfigCompiler HintCompiler where
-  type CompilerMonad HintCompiler = IO
+instance Compiler HintCompiler where
+  type CompilerBase HintCompiler = IO
   data CompilerConfig HintCompiler
          = HintCompilerConfig {
              ccGlobalImports :: [ModuleImport]
@@ -75,7 +75,7 @@ instance ConfigCompiler HintCompiler where
     eResult <- flip runReaderT env
              . unsafeRunInterpreterWithArgs args
              $ unHintCompiler act
-    either (throwM . ConfigCompilerError . toLines) return eResult
+    either (throwM . CompilerError . toLines) return eResult
 
   compileCode spec = HintCompiler $ do
     sp <- lift $ asks (ccPluginDirs . ceConfig)

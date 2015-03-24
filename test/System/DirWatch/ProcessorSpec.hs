@@ -2,8 +2,9 @@
 module System.DirWatch.ProcessorSpec (main, spec) where
 
 import Test.Hspec
-import System.DirWatch.PluginAPI
-import System.DirWatch.Processor (runProcessorM)
+import Data.Monoid (mempty)
+import System.DirWatch.Processor
+import System.DirWatch.ShellEnv
 import Data.ByteString.Char8 as BS
 
 main :: IO ()

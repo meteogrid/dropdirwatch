@@ -4,40 +4,55 @@ module System.DirWatch.PluginAPI (
     NoArgs
   , noArgs
   , modifyBaseName
-  , yieldFileName
-  , toLazyBytesStringC
+  , toLazyByteStringC
   , toStrictByteStringC
   , formatTime
   , formattedCurrentTime
   , mkPlugin
+
+  -- | Re-exports
+  , MonadResource
+  , liftIO
+  , takeFileName
+  , takeExtension
+  , takeDirectory
+  , joinPath
+  , ($$)
+  , (=$=)
+  , sinkFile
+  , sourceLbs
+  , conduitMap
+  , FromJSON (parseJSON)
+  , Object
+  , Value (Object)
+  , (.:)
+  , (.:?)
+  , (.!=)
+  , logDebug
+  , logInfo
+  , logWarn
+  , logError
+  , logCritical
+
   , module System.DirWatch.Processor
   , module System.DirWatch.PreProcessor
   , module System.DirWatch.ShellEnv
-  , module System.DirWatch.Logging
-  , module System.FilePath.Posix
-  , module Control.Applicative
-  , module Control.Monad.Trans.Resource
-  , module Data.Aeson
-  , module Data.ByteString
-  , module Data.Conduit
-  , module Data.Conduit.Binary
-  , module Data.Monoid
 ) where
 
-import Control.Applicative (pure, (<$>), (<*>), (<|>))
 import Control.Monad.Trans.Resource (MonadResource)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad (liftM)
-import Data.Monoid (mempty, mappend, (<>))
 import Data.Aeson (
     FromJSON (..)
   , Object
-  , Value (..)
+  , Value (Object)
   , (.:)
   , (.:?)
   , (.!=)
   )
-import Data.Conduit (Conduit, Source, (=$=), ($$), await, yield)
-import Data.Conduit.Binary (sourceLbs, sinkLbs, sourceFile, sinkFile)
+import Data.Conduit (Conduit, ($$), (=$=), await, yield)
+import Data.Conduit.Binary (sinkFile, sourceLbs)
+import qualified Data.Conduit.List as CL
 import qualified Data.HashMap.Strict as HM
 import System.FilePath.Posix
 import System.DirWatch.Processor hiding (ProcessorConfig, runProcessorM)
@@ -47,7 +62,6 @@ import System.DirWatch.ShellEnv (envSet, envAppend)
 import System.DirWatch.Logging (
   logDebug, logInfo, logWarn, logError, logCritical)
 import Data.Aeson.Types (parseEither)
-import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
 
@@ -58,15 +72,16 @@ import System.Locale (defaultTimeLocale)
 #endif
 import qualified Data.Time.Format as F (FormatTime, formatTime)
 
+conduitMap :: Monad m => (a -> b) -> Conduit a m b
+conduitMap = CL.map
+{-# INLINE conduitMap #-}
+
 modifyBaseName :: (FilePath -> FilePath) -> FilePath -> FilePath
 modifyBaseName func fpath = replaceBaseName fpath (func (takeBaseName fpath))
 
-yieldFileName  :: Monad m => PreProcessor m
-yieldFileName = yieldFilePath . takeFileName
-
-toLazyBytesStringC
+toLazyByteStringC
   :: MonadResource m => Conduit BS.ByteString m LBS.ByteString
-toLazyBytesStringC = go []
+toLazyByteStringC = go []
   where
     go chunks = do
       mChunk <- await
@@ -83,7 +98,7 @@ toStrictByteStringC = go []
       case mChunk of
         Nothing -> yield . BS.concat . map LBS.toStrict . reverse $ chunks
         Just chunk -> go (chunk:chunks)
-{-# INLINE toLazyBytesStringC #-}
+{-# INLINE toLazyByteStringC #-}
 {-# INLINE toStrictByteStringC #-}
 
 formatTime :: F.FormatTime t => String -> t -> String

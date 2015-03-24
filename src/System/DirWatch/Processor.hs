@@ -25,7 +25,6 @@ module System.DirWatch.Processor (
   , killChild
   , waitChild
   , tryWaitChild
-  , liftIO
   , runProcessorM
   , throwE
   , catchE

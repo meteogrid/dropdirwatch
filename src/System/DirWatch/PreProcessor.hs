@@ -10,6 +10,7 @@ module System.DirWatch.PreProcessor (
   , yieldSource
   , yieldConduit
   , yieldFilePath
+  , yieldFileName
   , (=>=)
 ) where
 
@@ -26,6 +27,7 @@ import Data.Time (UTCTime)
 import Data.Conduit (Conduit, Source, (=$=), ($$))
 import qualified Data.Conduit.Binary as CB
 import System.DirWatch.Types (HasCurrentTime(..))
+import System.FilePath.Posix (takeFileName)
 
 type PreProcessor m = FilePath -> PreProcessorT m ()
 
@@ -67,6 +69,9 @@ yieldSource filepath source = PreProcessorT $ tell [(filepath, source)]
 
 yieldFilePath :: Monad m => FilePath -> PreProcessorT m ()
 yieldFilePath filepath = getSource >>= yieldSource filepath
+
+yieldFileName  :: Monad m => PreProcessor m
+yieldFileName = yieldFilePath . takeFileName
 
 yieldConduit
   :: Monad m

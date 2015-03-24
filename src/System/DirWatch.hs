@@ -8,18 +8,21 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module System.DirWatch (
     Config (..)
-  , Options (..)
-  , Watcher (..)
-  , RunnableWatcher
   , RunnableConfig
-  , runWithOptions
-  , compileWith
-  , mainWithCompiler
+  , RunnableWatcher
+  , Watcher (..)
+  , WatchedPath (..)
+  , AbsPath
+  , mkAbsPath
+  , Options (..)
+  , compileWithSymTables
+  , mainDirWatcher
+  , forkDirWatcher
   , symbolTable
-  , setupLogging
   , def
 ) where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar)
 import Control.Monad (when, void)
 import Control.Monad.Reader (MonadReader, ReaderT(..), asks)
@@ -34,11 +37,17 @@ import Data.Monoid (mconcat)
 import Data.Typeable (Typeable, cast)
 import qualified Data.HashMap.Strict as HM
 import Data.Yaml (decodeFileEither)
-import System.INotify
+import System.INotify (
+  INotify, Event(..), EventVariety(..), withINotify, addWatch, removeWatch)
 import System.Posix.Signals (installHandler, Handler(Catch), sigINT, sigTERM)
 import System.DirWatch.Logging (Priority(..), setupLogging, logInfo, logError)
-import System.DirWatch.Config
-import System.DirWatch.Watcher
+import System.DirWatch.Util (AbsPath, mkAbsPath)
+import System.DirWatch.Config (
+    RunnableConfig, SerializableConfig, RunnableWatcher, Compiler(..)
+  , Config(..), Code(..) , CompilerError(..), SymbolTable(..), CompilerEnv(..)
+  , Watcher(..), WatchedPath(..), symbolTable, compileConfig)
+import System.DirWatch.Watcher (
+  StopCond, mkStopCond, runWatchLoop, waitForJobsToComplete, endLoop)
 import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Processor (Processor, ProcessorM)
 import Options.Applicative
@@ -73,21 +82,27 @@ options = Options
          <> value ERROR)
 
 
-mainWithCompiler
+mainDirWatcher
   :: FromJSON a
-  => (a -> IO (Either ConfigCompilerError RunnableConfig))
+  => (a -> IO (Either CompilerError RunnableConfig))
   -> [InfoMod Options]
   -> IO ()
-mainWithCompiler compiler infoOpts = do
+mainDirWatcher compiler infoOpts = do
   progOpts@Options{..} <- execParser opts
   setupLogging optSyslogPriority optPriority
   runWithOptions compiler progOpts
   where opts = info (helper <*> options) (mconcat (fullDesc:infoOpts))
 
+forkDirWatcher :: RunnableConfig -> IO (IO ())
+forkDirWatcher config = do
+  stopCond <- mkStopCond
+  void $ forkIO $ runWatchLoop config Nothing stopCond >>= waitForJobsToComplete
+  return (endLoop stopCond)
+
 
 runWithOptions
   :: FromJSON a
-  => (a -> IO (Either ConfigCompilerError RunnableConfig)) -> Options -> IO ()
+  => (a -> IO (Either CompilerError RunnableConfig)) -> Options -> IO ()
 runWithOptions compiler Options{..} = do
   stopCond <- mkStopCond
   pluginDirs <- newEmptyMVar
@@ -147,22 +162,22 @@ watchConfig configFile stopCond pluginDirs ino = do
       loop = do
         removeWatches
         takeMVar pluginDirs >>= mapM watchDir >>= writeIORef oldWatches
-        whenM (readIORef doWatchConfig) $ do
+        doWatch <- readIORef doWatchConfig
+        when doWatch $ do
           writeIORef doWatchConfig False
           void $ addWatch ino [MoveIn,Modify,OneShot] configFile $
             const (writeIORef doWatchConfig True >> signalReload)
   loop
 
-whenM :: Monad m => m Bool -> m () -> m ()
-whenM cond act = cond >>= flip when act
-
-logCompileError :: MonadIO m => ConfigCompilerError -> m ()
+logCompileError :: MonadIO m => CompilerError -> m ()
 logCompileError (ParseError err)
-  = $(logError) $ "Error when parsing YAML: " ++ show err
+  = $(logError) $ "Error when parsing config: " ++ show err
 logCompileError (UnresolvedSymbol sym)
   = $(logError) $ "Unresolved symbol: " ++ show sym
-logCompileError (ConfigCompilerError errs)
-  = $(logError) $ ('\n':(unlines errs))
+logCompileError (CompilerError errs)
+  = $(logError) $ unlines ("Could not compile config:":errs)
+logCompileError (InternalCompilerError err)
+  = $(logError) $ "Internal compiler error, please file a bug report: " ++ err
 
 
 installSignalHandlers :: StopCond -> MVar Int -> IO ()
@@ -185,27 +200,24 @@ newtype StaticResolver m a
            , MonadReader (CompilerEnv (StaticResolver m)))
 
 instance (Functor m, Applicative m, Monad m, MonadThrow m, MonadCatch m)
-  => ConfigCompiler (StaticResolver m) where
-  type CompilerMonad (StaticResolver m) = m
-  data CompilerConfig (StaticResolver m) = StaticResolverConfig
+  => Compiler (StaticResolver m) where
+  type CompilerBase (StaticResolver m) = m
+  data CompilerConfig (StaticResolver m) = SymbolTables
          (SymbolTable (Object -> Either String Processor))
          (SymbolTable (Object -> Either String (PreProcessor ProcessorM)))
   runCompiler env = flip runReaderT env . unStaticResolver
   compileCode :: forall a. Typeable a => Code -> StaticResolver m a
   compileCode spec =
     case spec of
-      EvalCode{}
-        -> throwM $ ConfigCompilerError ["Cannot evaluate code"]
-      InterpretedPlugin{}
-        -> throwM $ ConfigCompilerError ["Cannot interpret plugins"]
+      EvalCode{}          -> throwCompilerError "Cannot evaluate code"
+      InterpretedPlugin{} -> throwCompilerError "Cannot interpret plugins"
       LoadedPlugin{..} -> do
-        StaticResolverConfig
-          (SymbolTable processors) (SymbolTable preprocessors) <- asks ceConfig
-        case cast (HM.lookup codeSymbol processors) of
+        SymbolTables (SymbolTable procs) (SymbolTable preprocs) <- asks ceConfig
+        case cast (HM.lookup codeSymbol procs) of
           Just obj -> applyParams obj codeSymbol codeParams
-          Nothing  -> case cast (HM.lookup codeSymbol preprocessors) of
+          Nothing  -> case cast (HM.lookup codeSymbol preprocs) of
             Just obj -> applyParams obj codeSymbol codeParams
-            Nothing  -> throwM $ ConfigCompilerError ["Should not happen"]
+            Nothing  -> throwM $ InternalCompilerError "Invalid result type"
     where 
       applyParams
         :: Maybe (Object -> Either String a) -> String -> Object
@@ -213,18 +225,19 @@ instance (Functor m, Applicative m, Monad m, MonadThrow m, MonadCatch m)
       applyParams (Just obj) sym params =
         case obj params of
           Right v -> return v
-          Left e  -> throwM $ ConfigCompilerError $
-            [concat [ "Could not parse config for ", show sym, ": ", show e]]
-      applyParams Nothing sym _ =
-        throwM $ ConfigCompilerError $
-          [concat ["Plugin ", show sym, " is not defined"]]
+          Left e  -> throwCompilerError $
+            concat ["Could not parse parameters for ", show sym, ": ", show e]
+      applyParams Nothing sym _ = throwM $ UnresolvedSymbol sym
 
-compileWith
-  :: ConfigCompiler (StaticResolver m)
+      throwCompilerError = throwM . CompilerError . (:[])
+
+
+compileWithSymTables
+  :: Compiler (StaticResolver m)
   => SymbolTable (Object -> Either String Processor)
   -> SymbolTable (Object -> Either String (PreProcessor ProcessorM))
   -> SerializableConfig
-  -> CompilerMonad (StaticResolver m) (Either ConfigCompilerError RunnableConfig)
-compileWith processors preprocessors = compileConfig cc
-  where cc = StaticResolverConfig processors preprocessors
+  -> m (Either CompilerError RunnableConfig)
+compileWithSymTables processors preprocessors = compileConfig cc
+  where cc = SymbolTables processors preprocessors
 
