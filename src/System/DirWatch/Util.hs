@@ -27,6 +27,7 @@ import System.FilePath.Posix (
   , isAbsolute
   )
 import Data.String (IsString(..))
+import Text.Printf (printf)
 import System.FilePath.Glob (namesMatching)
 import System.FilePath.GlobPattern ((~~))
 
@@ -41,12 +42,14 @@ takePatternDirectory
 -- |Calculates the filename where a file should be archived based on time
 archiveDestination :: AbsPath -> Day -> AbsPath -> AbsPath
 archiveDestination archiveDir utcDay filename
-  = joinAbsPath archiveDir [dir, show y, show m, show d, fname]
+  = joinAbsPath archiveDir [dir, padY y, padDM m, padDM d, fname]
   where common  = commonPrefix archiveDir filename
         (y,m,d) = toGregorian utcDay
         relDest = makeRelative (toFilePath common) (toFilePath filename)
         dir     = takeDirectory relDest
         fname   = takeFileName relDest
+        padDM   = printf "%.2d"
+        padY    = printf "%.4d"
 
 commonPrefix :: AbsPath -> AbsPath -> AbsPath
 commonPrefix (AbsPath a) (AbsPath b)
