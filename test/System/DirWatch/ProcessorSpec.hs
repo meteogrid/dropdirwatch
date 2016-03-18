@@ -2,6 +2,7 @@
 module System.DirWatch.ProcessorSpec (main, spec) where
 
 import Test.Hspec
+import Control.Exception (ErrorCall(..))
 import Data.Monoid (mempty)
 import System.DirWatch.Processor
 import System.DirWatch.ShellEnv
@@ -20,8 +21,8 @@ spec = do
         _ -> expectationFailure "Expected to catch error"
 
     it "can catch normal exceptions" $ do
-      let handleEx (ProcessorException e) = return $ show e == "foo"
-          handleEx _                    = return False
+      let handleEx (ErrorCall "foo") = return True
+          handleEx _                 = return False
       result <- runProcessorM def undefined $ (error "foo") `catchE` handleEx
       case result of
         Right True -> return ()

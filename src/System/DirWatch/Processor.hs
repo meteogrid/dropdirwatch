@@ -279,8 +279,8 @@ instance Show ProcessorError where
 tryDecode :: ByteString -> String
 tryDecode s = either (const (show s)) T.unpack (decodeUtf8' s)
 
-throwE :: ProcessorError -> ProcessorM a
+throwE :: Exception e => e -> ProcessorM a
 throwE = throwM
 
-catchE :: ProcessorM a -> (ProcessorError -> ProcessorM a) -> ProcessorM a
+catchE :: Exception e => ProcessorM a -> (e -> ProcessorM a) -> ProcessorM a
 catchE = catch
