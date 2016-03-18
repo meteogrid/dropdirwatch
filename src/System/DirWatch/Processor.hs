@@ -33,26 +33,17 @@ module System.DirWatch.Processor (
 
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Concurrent (threadDelay, forkIO)
-import Control.Exception (IOException, fromException)
-import Control.Exception.Lifted as E (
-    Exception
-  , SomeException
-  , handle
-  , catch
-  , finally
-  )
-import Control.Monad (void)
+import Control.Exception (IOException)
+import Control.Monad (void, liftM)
 import Control.Monad.Reader (MonadReader(..), asks, ReaderT, runReaderT)
 import Control.Monad.Base (MonadBase)
-import Control.Monad.Catch (MonadThrow)
+import Control.Monad.Catch
 import Control.Monad.Trans.Control (MonadBaseControl(..))
-import Control.Monad.Trans.Except (ExceptT, runExceptT)
 import Control.Monad.Trans.Resource (
     MonadResource
   , ResourceT
   , runResourceT
   )
-import qualified Control.Monad.Trans.Except as E
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Conduit (Conduit, ConduitM, Source, ($$))
 import Data.Conduit.Binary (sinkHandle)
@@ -110,41 +101,34 @@ instance Default ProcessorConfig where
   def = ProcessorConfig mempty
 
   
-newtype ProcessorM a
-  = ProcessorM {
-      unProcessorM :: ExceptT ProcessorError (
-        ResourceT (ReaderT ProcessorEnv IO)
-        ) a
-      }
+newtype ProcessorM a =
+  ProcessorM {
+   unProcessorM :: ResourceT (ReaderT ProcessorEnv IO) a
+   }
   deriving ( Functor, Applicative, Monad, MonadIO, MonadBase IO, Typeable
-           , MonadThrow, MonadResource)
+           , MonadThrow, MonadCatch, MonadResource)
 
 runProcessorEnv :: ProcessorEnv -> ProcessorM a -> IO (Either ProcessorError a)
 runProcessorEnv env
-  = flip runReaderT env
+  = catchExceptions
+  . flip runReaderT env
   . runResourceT
-  . runExceptT
-  . E.handle (E.throwE . ProcessorException)
   . unProcessorM
+ 
+catchExceptions :: MonadCatch m => m a -> m (Either ProcessorError a)
+catchExceptions = flip catches [
+    Handler (\(ex :: ProcessorError) -> return (Left ex))
+  , Handler (\(ex :: SomeException ) -> return (Left (ProcessorException ex)))
+  ] . liftM Right
 
 deriving instance Typeable ConduitM
 
 instance (MonadReader ProcessorConfig) ProcessorM where
   ask = ProcessorM (asks pConfig)
-  local f act = do
-    env <- ProcessorM ask
-    let env' = env {pConfig = f (pConfig env)}
-    liftIO (runProcessorEnv env' act) >>= restoreM
+  local = error "MonadReader ProcessorConfig: Not implemented"
     
 instance HasCurrentTime ProcessorM where
   getTime = ProcessorM (asks pCurTime)
-
-instance MonadBaseControl IO ProcessorM where
-   type StM ProcessorM a = Either ProcessorError a
-   liftBaseWith f = do
-     env <- ProcessorM ask
-     liftIO $ f (runProcessorEnv env)
-   restoreM = either throwE return
 
 runProcessorM
   :: ProcessorConfig -> UTCTime -> ProcessorM a -> IO (Either ProcessorError a)
@@ -211,7 +195,7 @@ executeShellCmd ShellCmd{..} = do
     p <- createProcess process
     case (p, shInput) of
       ((Just s_in, Just s_out, Just s_err, ph), Just input) -> do
-        (input $$ sinkHandle s_in) `catchE` ignoreResourceVanished
+        ignoringResourceVanished (input $$ sinkHandle s_in)
         exitCode <- waitForProcess ph
         liftIO $ do
           out <- BS.hGetContents s_out
@@ -223,18 +207,17 @@ executeShellCmd ShellCmd{..} = do
           out <- BS.hGetContents s_out
           err <- BS.hGetContents s_err
           return (exitCode, out, err)
-      _ -> throwE $ InternalError "Unexpected state when creating process"
+      _ -> throwM $ InternalError "Unexpected state when creating process"
   case exitCode of
     ExitSuccess   -> return (out, err)
-    ExitFailure c -> throwE (ShellError shCmd c out err)
+    ExitFailure c -> throwM (ShellError shCmd c out err)
 
-ignoreResourceVanished :: ProcessorError -> ProcessorM ()
-ignoreResourceVanished pe@(ProcessorException e) =
-  case fromException e of
-    -- Command closed pipe without reading from it, ignore it
-    Just ioe | ioeGetErrorType ioe == ResourceVanished -> return ()
-    _                                                  -> throwE pe
-ignoreResourceVanished e = throwE e
+ignoringResourceVanished :: ProcessorM () -> ProcessorM ()
+ignoringResourceVanished = handleJust isResourceVanished (const (return ()))
+  where
+    isResourceVanished e
+      | ioeGetErrorType e == ResourceVanished = Just ()
+      | otherwise                             = Nothing
 
 -- | Execute several shell commands.
 --   NOTE: Only the first command will get the contents piped into it
@@ -297,9 +280,7 @@ tryDecode :: ByteString -> String
 tryDecode s = either (const (show s)) T.unpack (decodeUtf8' s)
 
 throwE :: ProcessorError -> ProcessorM a
-throwE = ProcessorM . E.throwE
+throwE = throwM
 
 catchE :: ProcessorM a -> (ProcessorError -> ProcessorM a) -> ProcessorM a
-catchE act handler = do
-  env <- ProcessorM ask
-  either handler return =<< liftIO (runProcessorEnv env act)
+catchE = catch
