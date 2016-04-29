@@ -51,7 +51,9 @@ import System.FilePath.Posix (takeDirectory)
 import System.Posix.Files (getFileStatus, modificationTime)
 import System.IO.Error (tryIOError)
 import System.DirWatch.Config (
-    RunnableConfig, RunnableWatcher, Config(..), Watcher(..), WatchedPath (..))
+    RunnableConfig, RunnableWatcher, Config(..), Watcher(..), WatchedPath (..)
+  , Archiver (..)
+  )
 import System.DirWatch.Util (
     AbsPath, joinAbsPath, globMatch, takePatternDirectory, archiveDestination
   , toFilePath, absPathsMatching)
@@ -118,7 +120,7 @@ data WatcherEnv
   }
 
 askConfig :: (RunnableConfig -> a) -> WatcherM a
-askConfig f = asks (f . wConfig) 
+askConfig f = asks (f . wConfig)
 
 
 data WatcherState
@@ -235,7 +237,7 @@ checkExistingFiles = do
         -- when it has been closed
         $(logInfo) $ concat ["File ", show abspath, " has been stable"]
         writeChan chan $ Work watchers abspath
-      
+
 
 addIWatch :: AbsPath -> (Event -> IO ()) -> WatcherM (Maybe IOError)
 addIWatch dir wch = do
@@ -307,37 +309,37 @@ archiveFile :: AbsPath -> WatcherM ()
 archiveFile fname = do
   noArchives <- askConfig cfgNoArchives
   let shouldArchive = all (not . (fname `globMatch`)) noArchives
-  when shouldArchive $ do
-    mArchiveDir <- askConfig cfgArchiveDir
-    case mArchiveDir of
-      Just archiveDir -> do
-        time <- liftIO getCurrentTime
-        let dest = toFilePath
-                     (archiveDestination archiveDir (utctDay time) fname)
-            destDir = takeDirectory dest
-        exists <- liftIO $ doesFileExist dest
-        let finalDest
-              | exists    = dest ++ "." ++ show secs
-              | otherwise = dest
-            secs = realToFrac (utctDayTime time) :: Fixed E2
-        result <- liftIO . tryIOError $ do
-          createDirectoryIfMissing True destDir
-          renameFile (toFilePath fname) finalDest
-        case result of
-          Left e -> do
-            $(logWarn) $ concat [ "Could not archive ", show fname, ": "
-                                , show e]
-          Right () ->
-            $(logInfo) $ concat ["Archived ", show fname, " -> ", finalDest]
-      Nothing -> return ()
+  when shouldArchive (askConfig cfgArchiver >>= flip archiveWith fname)
+
+archiveWith :: Archiver -> AbsPath -> WatcherM ()
+archiveWith NoArchive               _     = return ()
+archiveWith (ArchiveDir archiveDir) fname = do
+  time <- liftIO getCurrentTime
+  let dest = toFilePath
+               (archiveDestination archiveDir (utctDay time) fname)
+      destDir = takeDirectory dest
+  exists <- liftIO $ doesFileExist dest
+  let finalDest
+        | exists    = dest ++ "." ++ show secs
+        | otherwise = dest
+      secs = realToFrac (utctDayTime time) :: Fixed E2
+  result <- liftIO . tryIOError $ do
+    createDirectoryIfMissing True destDir
+    renameFile (toFilePath fname) finalDest
+  case result of
+    Left e -> do
+      $(logWarn) $ concat [ "Could not archive ", show fname, ": "
+                          , show e]
+    Right () ->
+      $(logInfo) $ concat ["Archived ", show fname, " -> ", finalDest]
 
 
 
-              
+
 runWatchersOnFile :: [RunnableWatcher] -> AbsPath -> WatcherM ()
 runWatchersOnFile toAdd filename = do
   ts <- gets wThreads
-  let mRunning = fmap (HS.map rwWatcher . tRunning) (HM.lookup filename ts)  
+  let mRunning = fmap (HS.map rwWatcher . tRunning) (HM.lookup filename ts)
       watchers = case mRunning of
         Just runSet -> filter (not . (`HS.member` runSet)) toAdd
         Nothing     -> toAdd
@@ -429,5 +431,5 @@ waitForJobsToComplete state = do
           tryWaitSomeChild t >>= return . maybe (Just t) (const Nothing)
         sleep 1
         go stillRunning (n+1)
-    runningThreads = map rwHandle . concat . map (HS.toList . tRunning) 
+    runningThreads = map rwHandle . concat . map (HS.toList . tRunning)
                    . HM.elems . wThreads $ state

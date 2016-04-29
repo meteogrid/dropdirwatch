@@ -17,6 +17,7 @@ module System.DirWatch.Config (
   , SymbolTable (..)
   , ProcessorCode (..)
   , ModuleImport (..)
+  , Archiver (..)
   , SerializableConfig
   , SerializableWatcher
   , RunnableWatcher
@@ -58,10 +59,25 @@ import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Util (AbsPath)
 import System.FilePath.GlobPattern (GlobPattern)
 
+data Archiver
+  = NoArchive
+  | ArchiveDir AbsPath
+  deriving Show
+
+instance ToJSON Archiver where
+  toJSON NoArchive      = Null
+  toJSON (ArchiveDir s) = toJSON s
+
+instance FromJSON Archiver where
+  parseJSON Null       = return NoArchive
+  parseJSON s@String{} = ArchiveDir <$> parseJSON s
+  parseJSON _          = fail "FromJSON(Archiver)"
+
+
 data Config pp p ppc pc
   = Config {
       cfgPluginDirs    :: ![FilePath]
-    , cfgArchiveDir    :: !(Maybe AbsPath)
+    , cfgArchiver      :: !Archiver
     , cfgShellEnv      :: !ShellEnv
     , cfgWatchers      :: ![Watcher pp p]
     , cfgStableTime    :: !NominalDiffTime
@@ -77,14 +93,14 @@ data Config pp p ppc pc
 instance Default (Config a b c d) where
   def = Config {
         cfgPluginDirs    = mempty
-      , cfgArchiveDir    = Nothing
+      , cfgArchiver      = NoArchive
       , cfgShellEnv      = mempty
       , cfgWatchers      = mempty
       , cfgStableTime    = 60
       , cfgPackageDbs    = mempty
       , cfgNoArchives    = mempty
       , cfgImports       = mempty
-      , cfgProcessors    = SymbolTable HM.empty 
+      , cfgProcessors    = SymbolTable HM.empty
       , cfgPreProcessors = SymbolTable HM.empty
       , cfgNumRetries    = 12
       , cfgRetryInterval = 300
@@ -107,7 +123,7 @@ symbolTable = SymbolTable . HM.fromList
 instance ToJSON SerializableConfig where
   toJSON Config{..}
     = object [
-      "archiveDir"    .= cfgArchiveDir
+      "archiver"      .= cfgArchiver
     , "env"           .= cfgShellEnv
     , "pluginDirs"    .= cfgPluginDirs
     , "watchers"      .= cfgWatchers
@@ -122,20 +138,29 @@ instance ToJSON SerializableConfig where
     ]
 
 instance FromJSON SerializableConfig where
-  parseJSON (Object v)
-    = Config <$>
-      v .:? "pluginDirs"    .!= cfgPluginDirs def <*>
-      v .:? "archiveDir" <*>
-      v .:? "env"           .!= cfgShellEnv def <*>
-      (v .: "watchers" >>= failIfDuplicate "Duplicate watcher" wName) <*>
-      maybeDiffTime (v .:? "stableTime") (cfgStableTime def) <*>
-      v .:? "packageDbs"    .!= cfgPackageDbs def <*>
-      v .:? "dontArchive"   .!= cfgNoArchives def <*>
-      v .:? "imports"       .!= cfgImports def <*>
-      v .:? "processors"    .!= cfgProcessors def <*>
-      v .:? "preprocessors" .!= cfgPreProcessors def <*>
-      v .:? "numRetries"    .!= cfgNumRetries def <*>
-      maybeDiffTime (v .:? "retryInterval") (cfgRetryInterval def)
+  parseJSON (Object v) = do
+    Config
+      <$> v .:? "pluginDirs"    .!= cfgPluginDirs def
+      <*> parseArchiver v
+      <*> v .:? "env"           .!= cfgShellEnv def
+      <*> (v .: "watchers" >>= failIfDuplicate "Duplicate watcher" wName)
+      <*> maybeDiffTime (v .:? "stableTime") (cfgStableTime def)
+      <*> v .:? "packageDbs"    .!= cfgPackageDbs def
+      <*> v .:? "dontArchive"   .!= cfgNoArchives def
+      <*> v .:? "imports"       .!= cfgImports def
+      <*> v .:? "processors"    .!= cfgProcessors def
+      <*> v .:? "preprocessors" .!= cfgPreProcessors def
+      <*> v .:? "numRetries"    .!= cfgNumRetries def
+      <*> maybeDiffTime (v .:? "retryInterval") (cfgRetryInterval def)
+    where
+      parseArchiver v = do
+        mArchiver    <- v .:? "archiver"
+        mArchiverDir <- v .:? "archiveDir" -- backwards compat
+        case (mArchiver, mArchiverDir) of
+          (Just a, Nothing)  -> return a
+          (Nothing, Just s)  -> return (ArchiveDir s)
+          (Nothing, Nothing) -> return NoArchive
+          _                  -> fail "Cannot define both archiver and archiveDir"
   parseJSON _ = fail "Expected an object for \"config\""
 
 maybeDiffTime
