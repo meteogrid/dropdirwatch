@@ -55,7 +55,7 @@ import System.DirWatch.Config (
   )
 import System.DirWatch.Archiver (archiveFilename)
 import System.DirWatch.Util (
-    AbsPath, joinAbsPath, globMatch, takePatternDirectory, archiveDestination
+    AbsPath, joinAbsPath, globMatch, takePatternDirectory
   , toFilePath, absPathsMatching)
 
 import System.DirWatch.Threading (
@@ -309,7 +309,9 @@ archiveFile :: AbsPath -> WatcherM ()
 archiveFile fname = do
   noArchives <- askConfig cfgNoArchives
   let shouldArchive = all (not . (fname `globMatch`)) noArchives
-  when shouldArchive (askConfig cfgArchiver >>= flip archiveFilename fname)
+  when shouldArchive $ do
+    archiver <- askConfig cfgArchiver
+    archiveFilename archiver Nothing fname
 
 
 

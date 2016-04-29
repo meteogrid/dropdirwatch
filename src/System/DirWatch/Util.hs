@@ -8,7 +8,6 @@ module System.DirWatch.Util (
   , absPathFilename
   , toFilePath
   , takePatternDirectory
-  , archiveDestination
   , commonPrefix
   ) where
 
@@ -16,7 +15,6 @@ import Data.Aeson (FromJSON (..) , ToJSON (..) , Value (String))
 import Data.Hashable (Hashable)
 import Data.Maybe (fromMaybe)
 import Data.Text (unpack)
-import Data.Time.Calendar (Day, toGregorian)
 import System.FilePath.Posix (
     joinPath
   , splitPath
@@ -27,7 +25,6 @@ import System.FilePath.Posix (
   , isAbsolute
   )
 import Data.String (IsString(..))
-import Text.Printf (printf)
 import System.FilePath.Glob (namesMatching)
 import System.FilePath.GlobPattern ((~~))
 
@@ -39,17 +36,6 @@ takePatternDirectory
   where
     notWildcard p = all (`notElem` p) "?*[]()|"
 
--- |Calculates the filename where a file should be archived based on time
-archiveDestination :: AbsPath -> Day -> AbsPath -> AbsPath
-archiveDestination archiveDir utcDay filename
-  = joinAbsPath archiveDir [dir, padY y, padDM m, padDM d, fname]
-  where common  = commonPrefix archiveDir filename
-        (y,m,d) = toGregorian utcDay
-        relDest = makeRelative (toFilePath common) (toFilePath filename)
-        dir     = takeDirectory relDest
-        fname   = takeFileName relDest
-        padDM   = printf "%.2d"
-        padY    = printf "%.4d"
 
 commonPrefix :: AbsPath -> AbsPath -> AbsPath
 commonPrefix (AbsPath a) (AbsPath b)

@@ -75,6 +75,8 @@ library
                      , template-haskell
                      , conduit
                      , conduit-extra
+                     , http-conduit
+                     , http-client
                      , resourcet
                      , temporary
                      , hashable
