@@ -52,8 +52,8 @@ import System.Posix.Files (getFileStatus, modificationTime)
 import System.IO.Error (tryIOError)
 import System.DirWatch.Config (
     RunnableConfig, RunnableWatcher, Config(..), Watcher(..), WatchedPath (..)
-  , Archiver (..)
   )
+import System.DirWatch.Archiver (archiveFilename)
 import System.DirWatch.Util (
     AbsPath, joinAbsPath, globMatch, takePatternDirectory, archiveDestination
   , toFilePath, absPathsMatching)
@@ -309,30 +309,7 @@ archiveFile :: AbsPath -> WatcherM ()
 archiveFile fname = do
   noArchives <- askConfig cfgNoArchives
   let shouldArchive = all (not . (fname `globMatch`)) noArchives
-  when shouldArchive (askConfig cfgArchiver >>= flip archiveWith fname)
-
-archiveWith :: Archiver -> AbsPath -> WatcherM ()
-archiveWith NoArchive               _     = return ()
-archiveWith (ArchiveDir archiveDir) fname = do
-  time <- liftIO getCurrentTime
-  let dest = toFilePath
-               (archiveDestination archiveDir (utctDay time) fname)
-      destDir = takeDirectory dest
-  exists <- liftIO $ doesFileExist dest
-  let finalDest
-        | exists    = dest ++ "." ++ show secs
-        | otherwise = dest
-      secs = realToFrac (utctDayTime time) :: Fixed E2
-  result <- liftIO . tryIOError $ do
-    createDirectoryIfMissing True destDir
-    renameFile (toFilePath fname) finalDest
-  case result of
-    Left e -> do
-      $(logWarn) $ concat [ "Could not archive ", show fname, ": "
-                          , show e]
-    Right () ->
-      $(logInfo) $ concat ["Archived ", show fname, " -> ", finalDest]
-
+  when shouldArchive (askConfig cfgArchiver >>= flip archiveFilename fname)
 
 
 

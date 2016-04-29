@@ -57,21 +57,9 @@ import System.DirWatch.ShellEnv (ShellEnv)
 import System.DirWatch.Processor (Processor, ProcessorM, shellProcessor)
 import System.DirWatch.PreProcessor (PreProcessor)
 import System.DirWatch.Util (AbsPath)
+import System.DirWatch.Archiver (Archiver (..))
 import System.FilePath.GlobPattern (GlobPattern)
 
-data Archiver
-  = NoArchive
-  | ArchiveDir AbsPath
-  deriving Show
-
-instance ToJSON Archiver where
-  toJSON NoArchive      = Null
-  toJSON (ArchiveDir s) = toJSON s
-
-instance FromJSON Archiver where
-  parseJSON Null       = return NoArchive
-  parseJSON s@String{} = ArchiveDir <$> parseJSON s
-  parseJSON _          = fail "FromJSON(Archiver)"
 
 
 data Config pp p ppc pc

@@ -45,6 +45,7 @@ library
                      , System.DirWatch.Types
                      , System.DirWatch.Threading
                      , System.DirWatch.Watcher
+                     , System.DirWatch.Archiver
                      , System.DirWatch.Util
   -- other-extensions:    
   build-depends:       base >=4.5 && <5
@@ -79,6 +80,7 @@ library
                      , hashable
                      , unix
                      , optparse-applicative
+                     , aws
   if flag(old-locale)
     build-depends: time < 1.5, old-locale
   else
