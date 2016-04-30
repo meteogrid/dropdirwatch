@@ -93,6 +93,7 @@ library
                      , containers
                      , stm-conduit
                      , stm-chans
+                     , stm
   if flag(old-locale)
     build-depends: time < 1.5, old-locale
   else

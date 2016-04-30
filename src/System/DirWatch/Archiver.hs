@@ -23,10 +23,13 @@ import           System.DirWatch.Util (
 import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.S3 as S3
+import           Control.Applicative ((<|>))
 import           Control.Concurrent (forkIO, threadDelay)
+import           Control.Concurrent.STM (newTVarIO, modifyTVar', readTVar)
 import           Control.Monad (void, when, liftM, forM_, foldM, replicateM_)
 import           Control.Monad.IO.Class (MonadIO(liftIO))
-import           Control.Monad.Catch (SomeException, fromException, try)
+import           Control.Monad.Catch (SomeException, fromException, try, finally)
+import           Control.Monad.STM (atomically, retry)
 import           Control.Monad.Trans.Resource (runResourceT)
 import           Crypto.Hash.Algorithms
 import           Crypto.Hash (Digest, hashlazy)
@@ -42,7 +45,7 @@ import           Data.Aeson (
                  )
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
-import           Data.Conduit (await, yield, runConduit, (=$=))
+import           Data.Conduit (await, awaitForever, yield, runConduit, (=$=))
 import           Data.Conduit.Combinators (sourceDirectoryDeep)
 import           Data.Conduit.TQueue (sourceTBMQueue, sinkTBMQueue)
 import           Control.Concurrent.STM.TBMQueue (newTBMQueueIO)
@@ -284,34 +287,47 @@ fromAwsLevel Aws.Error   = Logger.ERROR
 migrateFromArchiveDir :: Archiver -> AbsPath -> IO ()
 migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
   mgr <- newManager tlsManagerSettings
-  queue <- newTBMQueueIO 1000
-  replicateM_ 10 $ forkIO $ runConduit $
-    sourceTBMQueue queue =$= CL.mapM_ (uncurry (uploadIt mgr))
+  queue <- newTBMQueueIO 5000
+  pendingFiles <- newTVarIO 0
+  let upFiles   = liftIO (atomically (modifyTVar' pendingFiles (+1)))
+      downFiles = liftIO (atomically (modifyTVar' pendingFiles (subtract 1)))
+  replicateM_ numThreads $ forkIO $ runConduit $
+    sourceTBMQueue queue =$= awaitForever (\f ->
+      liftIO (uncurry (uploadIt mgr) f `finally` downFiles)
+      )
   runResourceT $ runConduit $
-    sourceDirectoryDeep False archiveDir =$= deDupe =$= sinkTBMQueue queue True
-
+        sourceDirectoryDeep False archiveDir
+    =$= deDupe
+    =$= awaitForever (\f -> upFiles >> yield f)
+    =$= sinkTBMQueue queue False
+  atomically $ do
+    pending <- readTVar pendingFiles
+    if pending == 0 then return () else retry
   where
+    numThreads = 15
     deDupe = loop "" HM.empty =$= CL.concat
     loop prevDir !prevDupes = do
       mPath <- await
       case mPath of
-        Nothing -> return ()
+        Nothing -> processFiles prevDupes
         Just realPath -> do
           let inNewDir = curDir /= prevDir
               curDupes = if inNewDir then HM.empty else prevDupes
               curDir   = takeDirectory realPath
-          when (inNewDir && not (HM.null prevDupes)) $
-            forM_ (HM.toList prevDupes) $ \(path, revPaths) -> do
-              realPaths <-
-                if length revPaths == 1 then return (map snd revPaths) else do
-                  $(logInfo) "Processing dupes"
-                  revPaths2 <- liftIO $ foldM stepCheckSums M.empty revPaths
-                  return . map snd . sort . M.elems $ revPaths2
-              yield (map (\p -> (path, p)) realPaths)
-              when (length realPaths > 1) ($(logInfo) "End dupes")
+          when inNewDir (processFiles prevDupes)
           let (path, rev) = splitRevision realPath
               newDupes = HM.insertWith (++) path [(rev,realPath)] curDupes
           loop curDir newDupes
+
+    processFiles fileSet =
+      forM_ (HM.toList fileSet) $ \(path, revPaths) -> do
+        realPaths <-
+          if length revPaths == 1 then return (map snd revPaths) else do
+            $(logInfo) "Processing dupes"
+            revPaths2 <- liftIO $ foldM stepCheckSums M.empty revPaths
+            return . map snd . sort . M.elems $ revPaths2
+        yield (map (\p -> (path, p)) realPaths)
+        when (length realPaths > 1) ($(logInfo) "End dupes")
 
     md5sum :: FilePath -> IO (Digest MD5)
     md5sum = liftM hashlazy . LBS.readFile
@@ -334,9 +350,14 @@ migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
       liftIO $ uploadToS3 mgr ar dPrefix dFilePath fname
 
 splitRevision :: FilePath -> (FilePath, Double)
-splitRevision path = (fname, fromMaybe 0 rev)
+splitRevision p = fromMaybe (p,0)
+                $ splitRevisionN 2 p
+              <|> splitRevisionN 1 p
+
+splitRevisionN :: Int -> FilePath -> Maybe (FilePath, Double)
+splitRevisionN n path = fmap (\r -> (fname, r)) rev
   where
-    (rParts, fParts) = splitAt 2 . reverse . splitOn "." . takeFileName $ path
+    (rParts, fParts) = splitAt n . reverse . splitOn "." . takeFileName $ path
     rev = readMaybe (intercalate "." (reverse rParts))
     fname  = case rev of
                Just _ -> takeDirectory path </> intercalate "." (reverse fParts)
