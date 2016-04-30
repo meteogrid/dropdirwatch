@@ -113,11 +113,12 @@ test-suite spec
   ghc-options:
       -Wall
   hs-source-dirs:
-      test src
+      test
   main-is:
       Spec.hs
   build-depends:
       base
+    , dropdirwatch
     , hspec   >= 1.3
     , hinotify
     , yaml

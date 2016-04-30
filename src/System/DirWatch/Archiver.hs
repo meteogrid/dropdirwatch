@@ -10,6 +10,7 @@ module System.DirWatch.Archiver (
   , archiveFilename
   , s3Archiver
   , migrateFromArchiveDir
+  , archiveDestination
 ) where
 
 import           System.DirWatch.Logging (logInfo, logWarn)

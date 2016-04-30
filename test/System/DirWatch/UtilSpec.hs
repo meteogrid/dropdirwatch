@@ -3,6 +3,7 @@ module System.DirWatch.UtilSpec (main, spec) where
 
 import Test.Hspec
 import System.DirWatch.Util
+import System.DirWatch.Archiver (archiveDestination)
 import Data.Time.Calendar (fromGregorian)
 
 main :: IO ()
@@ -35,17 +36,16 @@ spec = do
       archiveDestination "/srv/ftp/archive" day
           "/srv/ftp/dropbox/luther/foo.txt"
         `shouldBe`
-          "/srv/ftp/archive/dropbox/luther/2015/03/02/foo.txt"
+          ("/srv/ftp/dropbox/luther", "2015/03/02/foo.txt")
 
     it "subdirectory is absolute if archive dir and filename dont share prefix"$
       archiveDestination "/archive" day
           "/srv/ftp/dropbox/luther/foo.txt"
         `shouldBe`
-          "/archive/srv/ftp/dropbox/luther/2015/03/02/foo.txt"
+          ("/srv/ftp/dropbox/luther", "2015/03/02/foo.txt")
 
     it "dir can have a trailing slash" $
       archiveDestination "/srv/ftp/archive/" day
           "/srv/ftp/dropbox/luther/foo.txt"
         `shouldBe`
-          "/srv/ftp/archive/dropbox/luther/2015/03/02/foo.txt"
-
+          ("/srv/ftp/dropbox/luther", "2015/03/02/foo.txt")
