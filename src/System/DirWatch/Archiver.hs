@@ -24,10 +24,9 @@ import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.S3 as S3
 import           Control.Concurrent (forkIO, threadDelay)
-import           Control.Concurrent.QSem (newQSem, waitQSem, signalQSem)
-import           Control.Monad (void, when, liftM, forM_, foldM)
+import           Control.Monad (void, when, liftM, forM_, foldM, replicateM_)
 import           Control.Monad.IO.Class (MonadIO(liftIO))
-import           Control.Monad.Catch (SomeException, fromException, try, bracket_)
+import           Control.Monad.Catch (SomeException, fromException, try)
 import           Control.Monad.Trans.Resource (runResourceT)
 import           Crypto.Hash.Algorithms
 import           Crypto.Hash (Digest, hashlazy)
@@ -43,8 +42,11 @@ import           Data.Aeson (
                  )
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
-import           Data.Conduit (await, ($$))
+import           Data.Conduit (await, yield, runConduit, (=$=))
 import           Data.Conduit.Combinators (sourceDirectoryDeep)
+import           Data.Conduit.TQueue (sourceTBMQueue, sinkTBMQueue)
+import           Control.Concurrent.STM.TBMQueue (newTBMQueueIO)
+import qualified Data.Conduit.List as CL
 import           Data.Fixed (Fixed, E2)
 import           Data.List (intercalate, sort)
 import           Data.List.Split (splitOn)
@@ -282,11 +284,15 @@ fromAwsLevel Aws.Error   = Logger.ERROR
 migrateFromArchiveDir :: Archiver -> AbsPath -> IO ()
 migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
   mgr <- newManager tlsManagerSettings
-  sem <- newQSem 5
-  runResourceT $
-    sourceDirectoryDeep False archiveDir $$ loop sem mgr "" HM.empty
+  queue <- newTBMQueueIO 1000
+  replicateM_ 10 $ forkIO $ runConduit $
+    sourceTBMQueue queue =$= CL.mapM_ (uncurry (uploadIt mgr))
+  runResourceT $ runConduit $
+    sourceDirectoryDeep False archiveDir =$= deDupe =$= sinkTBMQueue queue True
+
   where
-    loop sem mgr prevDir !prevDupes = do
+    deDupe = loop "" HM.empty =$= CL.concat
+    loop prevDir !prevDupes = do
       mPath <- await
       case mPath of
         Nothing -> return ()
@@ -295,10 +301,17 @@ migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
               curDupes = if inNewDir then HM.empty else prevDupes
               curDir   = takeDirectory realPath
           when (inNewDir && not (HM.null prevDupes)) $
-            processDupes sem mgr prevDupes
+            forM_ (HM.toList prevDupes) $ \(path, revPaths) -> do
+              realPaths <-
+                if length revPaths == 1 then return (map snd revPaths) else do
+                  $(logInfo) "Processing dupes"
+                  revPaths2 <- liftIO $ foldM stepCheckSums M.empty revPaths
+                  return . map snd . sort . M.elems $ revPaths2
+              yield (map (\p -> (path, p)) realPaths)
+              when (length realPaths > 1) ($(logInfo) "End dupes")
           let (path, rev) = splitRevision realPath
               newDupes = HM.insertWith (++) path [(rev,realPath)] curDupes
-          loop sem mgr curDir newDupes
+          loop curDir newDupes
 
     md5sum :: FilePath -> IO (Digest MD5)
     md5sum = liftM hashlazy . LBS.readFile
@@ -307,18 +320,8 @@ migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
       csum <- md5sum p
       return (M.insert csum (r,p) m)
 
-    processDupes sem mgr dupes =
-      forM_ (HM.toList dupes) $ \(path, revPaths) -> do
-      realPaths <-
-        if length revPaths == 1 then return (map snd revPaths) else do
-          $(logInfo) "Processing dupes"
-          revPaths2 <- liftIO $ foldM stepCheckSums M.empty revPaths
-          return . map snd . sort . M.elems $ revPaths2
-      liftIO $ mapM_ (uploadIt sem mgr path) realPaths
-      when (length realPaths > 1) ($(logInfo) "End dupes")
 
-
-    uploadIt s mgr path realPath = bracket_ (waitQSem s) (signalQSem s) $ do
+    uploadIt mgr path realPath  = do
       let (fps, pps) = splitAt 4 . reverse . splitPath $ path
           dPrefix = dropTrailingPathSeparator
                   . makeRelative archiveDir
@@ -328,7 +331,7 @@ migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
           dFilePath = joinPath (reverse fps)
           Just fname = mkAbsPath realPath
       -- $(logInfo) (show (fname, dPrefix, dFilePath))
-      uploadToS3 mgr ar dPrefix dFilePath fname
+      liftIO $ uploadToS3 mgr ar dPrefix dFilePath fname
 
 splitRevision :: FilePath -> (FilePath, Double)
 splitRevision path = (fname, fromMaybe 0 rev)
