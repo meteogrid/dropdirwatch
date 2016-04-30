@@ -1,5 +1,6 @@
-{-# OPTIONS_GHC -Werror #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -8,19 +9,28 @@ module System.DirWatch.Archiver (
     Archiver (..)
   , archiveFilename
   , s3Archiver
+  , migrateFromArchiveDir
 ) where
 
 import           System.DirWatch.Logging (logInfo, logWarn)
-import           System.DirWatch.Util (AbsPath, toFilePath , commonPrefix)
+import           System.DirWatch.Util (
+                   AbsPath
+                 , mkAbsPath
+                 , toFilePath
+                 , commonPrefix
+                 )
 
 import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.S3 as S3
-import           Control.Concurrent (forkIO)
-import           Control.Monad (void)
+import           Control.Concurrent (forkIO, threadDelay)
+import           Control.Concurrent.QSem (newQSem, waitQSem, signalQSem)
+import           Control.Monad (void, when, liftM, forM_, foldM)
 import           Control.Monad.IO.Class (MonadIO(liftIO))
-import           Control.Monad.Catch (SomeException, fromException, try)
+import           Control.Monad.Catch (SomeException, fromException, try, bracket_)
 import           Control.Monad.Trans.Resource (runResourceT)
+import           Crypto.Hash.Algorithms
+import           Crypto.Hash (Digest, hashlazy)
 import           Data.Aeson (
                    FromJSON (..)
                  , ToJSON (..)
@@ -32,14 +42,22 @@ import           Data.Aeson (
                  , (.!=)
                  )
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy as LBS
+import           Data.Conduit (await, ($$))
+import           Data.Conduit.Combinators (sourceDirectoryDeep)
 import           Data.Fixed (Fixed, E2)
+import           Data.List (intercalate, sort)
+import           Data.List.Split (splitOn)
+import qualified Data.Map.Strict as M
+import qualified Data.HashMap.Strict as HM
+import           Data.Maybe (fromMaybe)
 import           Data.Monoid ((<>))
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import           Data.Time.Calendar (Day, toGregorian)
 import           Data.Time.Clock (UTCTime, getCurrentTime, utctDay, utctDayTime)
 import           Network.HTTP.Conduit (tlsManagerSettings, newManager)
-import           Network.HTTP.Client (streamFile)
+import           Network.HTTP.Client (Manager, streamFile)
 import           System.IO.Error (tryIOError)
 import           System.Directory  (createDirectoryIfMissing
                                   , removeFile
@@ -51,10 +69,13 @@ import           System.FilePath.Posix (
                  , takeFileName
                  , makeRelative
                  , joinPath
+                 , splitPath
+                 , dropTrailingPathSeparator
                  , (</>)
                  )
 import qualified System.Log.Logger as Logger
 import           Text.Printf (printf)
+import           Text.Read (readMaybe)
 
 
 data Archiver
@@ -170,51 +191,63 @@ archiveFilename (ArchiveDir archiveDir) mTime fname = do
 
 archiveFilename ar@ArchiveS3{} mTime fname = do
   time <- maybe (liftIO getCurrentTime) return mTime
-  creds <- Aws.makeCredentials (arS3KeyID ar) (arS3AccessKey ar)
-  body <- liftIO (streamFile (toFilePath fname))
-  let cfg = awsConfig creds
-      bucket = arS3BucketPrefix ar <> goodPrefix
-      badChars = ["/", "_", "."]
-      goodPrefix = foldr (flip T.replace "-") (T.pack dPrefix) badChars
-      (dPrefix, dFilePath) =
+  let (dPrefix, dFilePath) =
         archiveDestination (arS3StripPrefix ar) (utctDay time) fname
-      key = T.pack dFilePath
-      po = (S3.putObject bucket key body) {
-              S3.poMetadata     = [("filename", T.pack (toFilePath fname))]
-            , S3.poAcl          = Just (arS3ObjectAcl ar)
-            , S3.poStorageClass = Just (arS3ObjectStorage ar)
-            }
-      pb = (S3.putBucket bucket) {
-              S3.pbCannedAcl          = Just (arS3BucketAcl ar)
-            , S3.pbLocationConstraint = arS3BucketLocation ar
-            }
-      s3cfg:: S3.S3Configuration Aws.NormalQuery
-      s3cfg = S3.s3 Aws.HTTPS (arS3Endpoint ar) False
-      location = concat ["https://", T.unpack bucket, ".s3.amazonaws.com/"
-                        , dFilePath]
-      success = logSuccess >> liftIO (removeFile (toFilePath fname))
-      logSuccess = $(logInfo) $
-        concat ["Archived ", show fname, " at ", location]
-      logError e = $(logWarn) $
-        concat ["Could not archive ", show fname, ": ", show e]
   void $ liftIO $ forkIO $ do
     mgr <- newManager tlsManagerSettings
-    runResourceT $ do
-      respPo <- try $ Aws.pureAws cfg s3cfg mgr po
+    uploadToS3 mgr ar dPrefix dFilePath fname
+
+uploadToS3 :: Manager -> Archiver -> String -> String -> AbsPath -> IO ()
+uploadToS3 mgr ar@ArchiveS3{} dPrefix dFilePath fname
+  = tryUpload 10
+  where
+    retryDelay = 10000000 :: Int
+    tryUpload 0 = return ()
+    tryUpload n = do
+      creds <- Aws.makeCredentials (arS3KeyID ar) (arS3AccessKey ar)
+      body <- streamFile (toFilePath fname)
+      let key = T.pack dFilePath
+          cfg = awsConfig creds
+          bucket = T.toLower (arS3BucketPrefix ar <> goodPrefix)
+          badChars = ["/", "_", "."]
+          goodPrefix = foldr (flip T.replace "-") (T.pack dPrefix) badChars
+          po = (S3.putObject bucket key body) {
+                  S3.poMetadata     = [("filename", T.pack (toFilePath fname))]
+                , S3.poAcl          = Just (arS3ObjectAcl ar)
+                , S3.poStorageClass = Just (arS3ObjectStorage ar)
+                }
+          pb = (S3.putBucket bucket) {
+                  S3.pbCannedAcl          = Just (arS3BucketAcl ar)
+                , S3.pbLocationConstraint = arS3BucketLocation ar
+                }
+          s3cfg:: S3.S3Configuration Aws.NormalQuery
+          s3cfg = S3.s3 Aws.HTTPS (arS3Endpoint ar) False
+          location = concat ["https://", T.unpack bucket, ".s3.amazonaws.com/"
+                            , dFilePath]
+          onSuccess = logSuccess >> liftIO (removeFile (toFilePath fname))
+          onError e = logError e >> threadDelay retryDelay >> tryUpload (n-1)
+
+          logSuccess = $(logInfo) $
+            concat ["Archived ", show fname, " at ", location]
+          logError e = $(logWarn) $
+            concat [ "Could not archive ", show fname, ": ", show e
+                   , ". Will retry ", show (n-1), " more times" ]
+      respPo <- runResourceT $ try $ Aws.pureAws cfg s3cfg mgr po
       case respPo of
-        Right _ -> success
+        Right _ -> onSuccess
         Left e | isNoBucketError e -> do
           $(logInfo) $ concat ["Creating bucket", show bucket]
-          respPb <- try $ Aws.pureAws cfg s3cfg mgr pb
+          respPb <- runResourceT $ try $ Aws.pureAws cfg s3cfg mgr pb
           case respPb of
             Left (ePb :: SomeException) -> $(logWarn) $
                 concat ["Could not create bucket ", show bucket, ": ", show ePb]
             Right _ -> do
-              respPo2 <- try $ Aws.pureAws cfg s3cfg mgr po
+              respPo2 <- runResourceT $ try $ Aws.pureAws cfg s3cfg mgr po
               case respPo2 of
-                Right _ -> success
-                Left (ePo2 :: SomeException) -> logError ePo2
-        Left  e -> logError e
+                Right _ -> onSuccess
+                Left (ePo2 :: SomeException) -> onError ePo2
+        Left  e -> onError e
+uploadToS3 _ _ _ _ _ = fail "Need a ArchiveS3"
 
 isNoBucketError :: SomeException -> Bool
 isNoBucketError e
@@ -245,3 +278,63 @@ fromAwsLevel Aws.Debug   = Logger.DEBUG
 fromAwsLevel Aws.Info    = Logger.INFO
 fromAwsLevel Aws.Warning = Logger.WARNING
 fromAwsLevel Aws.Error   = Logger.ERROR
+
+migrateFromArchiveDir :: Archiver -> AbsPath -> IO ()
+migrateFromArchiveDir ar (toFilePath -> archiveDir) = do
+  mgr <- newManager tlsManagerSettings
+  sem <- newQSem 5
+  runResourceT $
+    sourceDirectoryDeep False archiveDir $$ loop sem mgr "" HM.empty
+  where
+    loop sem mgr prevDir !prevDupes = do
+      mPath <- await
+      case mPath of
+        Nothing -> return ()
+        Just realPath -> do
+          let inNewDir = curDir /= prevDir
+              curDupes = if inNewDir then HM.empty else prevDupes
+              curDir   = takeDirectory realPath
+          when (inNewDir && not (HM.null prevDupes)) $
+            processDupes sem mgr prevDupes
+          let (path, rev) = splitRevision realPath
+              newDupes = HM.insertWith (++) path [(rev,realPath)] curDupes
+          loop sem mgr curDir newDupes
+
+    md5sum :: FilePath -> IO (Digest MD5)
+    md5sum = liftM hashlazy . LBS.readFile
+
+    stepCheckSums m (r,p) = do
+      csum <- md5sum p
+      return (M.insert csum (r,p) m)
+
+    processDupes sem mgr dupes =
+      forM_ (HM.toList dupes) $ \(path, revPaths) -> do
+      realPaths <-
+        if length revPaths == 1 then return (map snd revPaths) else do
+          $(logInfo) "Processing dupes"
+          revPaths2 <- liftIO $ foldM stepCheckSums M.empty revPaths
+          return . map snd . sort . M.elems $ revPaths2
+      liftIO $ mapM_ (uploadIt sem mgr path) realPaths
+      when (length realPaths > 1) ($(logInfo) "End dupes")
+
+
+    uploadIt s mgr path realPath = bracket_ (waitQSem s) (signalQSem s) $ do
+      let (fps, pps) = splitAt 4 . reverse . splitPath $ path
+          dPrefix = dropTrailingPathSeparator
+                  . makeRelative archiveDir
+                  . joinPath
+                  . reverse
+                  $ pps
+          dFilePath = joinPath (reverse fps)
+          Just fname = mkAbsPath realPath
+      -- $(logInfo) (show (fname, dPrefix, dFilePath))
+      uploadToS3 mgr ar dPrefix dFilePath fname
+
+splitRevision :: FilePath -> (FilePath, Double)
+splitRevision path = (fname, fromMaybe 0 rev)
+  where
+    (rParts, fParts) = splitAt 2 . reverse . splitOn "." . takeFileName $ path
+    rev = readMaybe (intercalate "." (reverse rParts))
+    fname  = case rev of
+               Just _ -> takeDirectory path </> intercalate "." (reverse fParts)
+               Nothing -> path
